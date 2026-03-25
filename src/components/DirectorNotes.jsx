@@ -138,7 +138,7 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId }) {
                     </span>
                     {charInfo && (
                       <span className="text-xs font-sans text-warmgray">
-                        — {charInfo.name}, line {note.lineId}
+                        {charInfo.name}, line {note.lineId}
                       </span>
                     )}
                   </div>
@@ -165,7 +165,7 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId }) {
         {/* Footer */}
         <div className="px-8 py-4 border-t border-parchment-deep bg-parchment-warm/50">
           <p className="text-xs font-sans text-warmgray text-center">
-            {filteredNotes.length} note{filteredNotes.length !== 1 ? "s" : ""} — Notes are generated from AI analysis of your rehearsal
+            {filteredNotes.length} note{filteredNotes.length !== 1 ? "s" : ""} - Generated from AI analysis of your rehearsal
           </p>
         </div>
       </div>

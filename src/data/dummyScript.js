@@ -138,21 +138,21 @@ export const directorNotes = [
     lineId: 9,
     type: "pacing",
     severity: "suggestion",
-    text: "Try a longer pause before 'proud Titania' — let the audience feel the weight of their history before you name her.",
+    text: "Try a longer pause before 'proud Titania'. Let the audience feel the weight of their history before you name her.",
   },
   {
     id: 2,
     lineId: 3,
     type: "inflection",
     severity: "note",
-    text: "This speech has a lilting, musical rhythm. Lean into the sing-song quality — you're a fairy, not a newsreader. Let 'swifter than the moon's sphere' really soar.",
+    text: "This speech has a lilting, musical rhythm. Lean into the sing-song quality. You're a fairy, not a newsreader. Let 'swifter than the moon's sphere' really soar.",
   },
   {
     id: 3,
     lineId: 15,
     type: "emotion",
     severity: "important",
-    text: "Titania is genuinely hurt here, not just angry. The 'forgeries of jealousy' line should crack slightly — she's recounting real damage to the natural world caused by their quarrel.",
+    text: "Titania is genuinely hurt here, not just angry. The 'forgeries of jealousy' line should crack slightly. She's recounting real damage to the natural world caused by their quarrel.",
   },
   {
     id: 4,
@@ -166,7 +166,7 @@ export const directorNotes = [
     lineId: 20,
     type: "pacing",
     severity: "important",
-    text: "The shift from anger ('go thy way') to scheming ('My gentle Puck') should be sudden and chilling. Don't rush the transition — a beat of silence, then the smile.",
+    text: "The shift from anger ('go thy way') to scheming ('My gentle Puck') should be sudden and chilling. Don't rush the transition. A beat of silence, then the smile.",
   },
 ];
 
