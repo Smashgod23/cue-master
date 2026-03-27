@@ -76,7 +76,7 @@ python scripts/serve_director.py
 
 # Terminal 2 - Start the backend API server (port 8000)
 source .venv/bin/activate
-python -m uvicorn backend.main:app --port 8000
+python scripts/serve_backend.py
 
 # Terminal 3 - Start the frontend dev server (port 5173)
 npm run dev
@@ -91,10 +91,13 @@ scripts/
   install_dependencies.sh  - one-shot environment setup
   prepare_data.py          - downloads plays, generates training data
   train_director.py        - QLoRA fine-tuning pipeline
-  serve_director.py        - model inference server
+  serve_director.py        - model inference server (port 8001)
+  serve_backend.py         - main backend API server (port 8000)
 
 src/
   components/              - React UI components
+  hooks/                   - custom React hooks (WebSocket, etc.)
+  pages/                   - route pages (Home, Upload, Setup)
   data/                    - dummy script data (dev/demo)
   index.css                - design system tokens
 
@@ -114,7 +117,9 @@ tools/
 ## Current Status
 
 - Step 1 complete: training pipeline, fine-tuned model, model serving endpoint
-- Steps 2-6 in progress: frontend expansion, backend API, audio pipeline, director logic
+- Step 2 complete: React Router multi-page app with 4 pages, selectable mode cards, WebSocket wiring
+- Step 3 complete: backend API server with script upload/parsing (PDF, TXT, image OCR)
+- Steps 4-6 next: internet research + RAG, real-time audio pipeline, director logic + TTS
 
 ## Commands
 
