@@ -1,13 +1,16 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import ScriptView from "./ScriptView";
 import ControlPanel from "./ControlPanel";
 import DirectorNotes from "./DirectorNotes";
+import useRehearsalSocket from "../hooks/useRehearsalSocket";
 
 export default function RehearsalRoom() {
   const [mode, setMode] = useState("learning");
-  const [activeLine, setActiveLine] = useState(9);
   const [notesOpen, setNotesOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+
+  const ws = useRehearsalSocket();
 
   const toggleMode = () => {
     setMode((prev) => (prev === "learning" ? "performance" : "learning"));
@@ -17,7 +20,7 @@ export default function RehearsalRoom() {
     <div className="h-screen flex flex-col bg-parchment">
       {/* Top bar */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-parchment-deep bg-parchment-warm/60">
-        <div className="flex items-center gap-3">
+        <Link to="/" className="flex items-center gap-3 no-underline">
           {/* Logo mark */}
           <div className="w-9 h-9 rounded-lg bg-crimson flex items-center justify-center shadow-sm shadow-crimson/20">
             <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -32,7 +35,7 @@ export default function RehearsalRoom() {
               Rehearsal Studio
             </span>
           </div>
-        </div>
+        </Link>
 
         <div className="flex items-center gap-3">
           {/* Mobile panel toggle */}
@@ -60,27 +63,29 @@ export default function RehearsalRoom() {
               <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
             </svg>
             <span className="hidden sm:inline">Notes</span>
-            <span className="bg-crimson text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-              5
-            </span>
+            {ws.notes.length > 0 && (
+              <span className="bg-crimson text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                {ws.notes.length}
+              </span>
+            )}
           </button>
         </div>
       </header>
 
-      {/* Main content — split screen */}
+      {/* Main content -- split screen */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Left pane — Script */}
+        {/* Left pane -- Script */}
         <div className="flex-1 min-w-0 lg:flex-[3]">
           <ScriptView
-            activeLine={activeLine}
-            onLineClick={setActiveLine}
+            activeLine={ws.activeLine}
+            onLineClick={() => {}}
           />
         </div>
 
         {/* Divider */}
         <div className="hidden lg:block w-px bg-parchment-deep" />
 
-        {/* Right pane — Control Panel (desktop: always visible, mobile: overlay) */}
+        {/* Right pane -- Control Panel (desktop: always visible, mobile: overlay) */}
         <div
           className={`
             lg:flex-[1.2] lg:min-w-[320px] lg:max-w-[400px] lg:relative lg:translate-x-0
@@ -100,6 +105,10 @@ export default function RehearsalRoom() {
           <ControlPanel
             mode={mode}
             onModeToggle={toggleMode}
+            liveState={ws.status}
+            connected={ws.connected}
+            onConnect={ws.connect}
+            onDisconnect={ws.disconnect}
             onOpenNotes={() => {
               setNotesOpen(true);
               setPanelOpen(false);
@@ -108,11 +117,12 @@ export default function RehearsalRoom() {
         </div>
       </div>
 
-      {/* Director Notes Modal */}
+      {/* Director Notes Modal -- uses live notes from WebSocket when available, falls back to dummy data */}
       <DirectorNotes
         isOpen={notesOpen}
         onClose={() => setNotesOpen(false)}
-        activeLineId={activeLine}
+        activeLineId={ws.activeLine}
+        liveNotes={ws.notes}
       />
     </div>
   );

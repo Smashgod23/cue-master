@@ -29,15 +29,18 @@ const typeLabels = {
   blocking: "Blocking",
 };
 
-export default function DirectorNotes({ isOpen, onClose, activeLineId }) {
+export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes }) {
   const [filter, setFilter] = useState("all");
+
+  // Use live WebSocket notes when available, otherwise fall back to dummy data
+  const sourceNotes = liveNotes && liveNotes.length > 0 ? liveNotes : directorNotes;
 
   const filteredNotes =
     filter === "all"
-      ? directorNotes
+      ? sourceNotes
       : filter === "current"
-        ? directorNotes.filter((n) => n.lineId === activeLineId)
-        : directorNotes.filter((n) => n.type === filter);
+        ? sourceNotes.filter((n) => n.lineId === activeLineId)
+        : sourceNotes.filter((n) => n.type === filter);
 
   if (!isOpen) return null;
 

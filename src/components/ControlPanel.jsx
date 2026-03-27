@@ -5,14 +5,15 @@ import { userCharacter, characters } from "../data/dummyScript";
 
 const liveStates = ["idle", "listening", "analyzing", "speaking"];
 
-export default function ControlPanel({ mode, onModeToggle, onOpenNotes }) {
-  // Cycle through live states for demo purposes
-  const [liveStateIndex, setLiveStateIndex] = useState(0);
+export default function ControlPanel({ mode, onModeToggle, liveState, connected, onConnect, onDisconnect, onOpenNotes }) {
+  // Demo cycler -- used only when WebSocket isn't connected
+  const [demoIndex, setDemoIndex] = useState(0);
 
   const cycleLiveState = () => {
-    setLiveStateIndex((prev) => (prev + 1) % liveStates.length);
+    setDemoIndex((prev) => (prev + 1) % liveStates.length);
   };
 
+  const currentState = connected ? liveState : liveStates[demoIndex];
   const userChar = characters[userCharacter];
 
   return (
@@ -60,16 +61,18 @@ export default function ControlPanel({ mode, onModeToggle, onOpenNotes }) {
         </div>
 
         {/* Live indicator */}
-        <LiveIndicator state={liveStates[liveStateIndex]} />
+        <LiveIndicator state={currentState} />
 
-        {/* Demo control — cycle states */}
-        <button
-          onClick={cycleLiveState}
-          className="w-full py-2.5 rounded-lg bg-parchment-deep/60 text-ink-muted text-xs font-sans font-medium
-            hover:bg-parchment-deep transition-colors cursor-pointer"
-        >
-          Cycle Status (Demo)
-        </button>
+        {/* Demo control -- only show when not connected to WebSocket */}
+        {!connected && (
+          <button
+            onClick={cycleLiveState}
+            className="w-full py-2.5 rounded-lg bg-parchment-deep/60 text-ink-muted text-xs font-sans font-medium
+              hover:bg-parchment-deep transition-colors cursor-pointer"
+          >
+            Cycle Status (Demo)
+          </button>
+        )}
 
         {/* Divider */}
         <div className="flex items-center gap-3 px-4">
@@ -82,17 +85,34 @@ export default function ControlPanel({ mode, onModeToggle, onOpenNotes }) {
 
         {/* Action buttons */}
         <div className="space-y-3">
-          {/* Start rehearsal */}
+          {/* Start / Stop rehearsal */}
           <button
-            className="w-full flex items-center justify-center gap-2 py-3.5 px-5 rounded-xl
-              bg-crimson text-white font-sans font-semibold text-sm
-              hover:bg-crimson-muted active:scale-[0.98] transition-all duration-200
-              shadow-md shadow-crimson/20 cursor-pointer"
+            onClick={connected ? onDisconnect : onConnect}
+            className={`w-full flex items-center justify-center gap-2 py-3.5 px-5 rounded-xl
+              font-sans font-semibold text-sm
+              active:scale-[0.98] transition-all duration-200
+              shadow-md cursor-pointer
+              ${connected
+                ? "bg-ink text-white shadow-ink/20 hover:bg-ink-soft"
+                : "bg-crimson text-white shadow-crimson/20 hover:bg-crimson-muted"
+              }`}
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="5 3 19 12 5 21 5 3" />
-            </svg>
-            Begin Rehearsal
+            {connected ? (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </svg>
+                End Rehearsal
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+                Begin Rehearsal
+              </>
+            )}
           </button>
 
           {/* Director notes */}
@@ -108,9 +128,6 @@ export default function ControlPanel({ mode, onModeToggle, onOpenNotes }) {
               <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
             </svg>
             Director's Notes
-            <span className="ml-auto bg-crimson/10 text-crimson text-[10px] font-bold px-1.5 py-0.5 rounded-full">
-              5
-            </span>
           </button>
 
           {/* Restart scene */}
