@@ -175,7 +175,7 @@ export default function ControlPanel({ mode, onModeToggle, liveState, connected,
       {/* Footer */}
       <div className="px-6 py-4 border-t border-parchment-deep bg-parchment-warm/60">
         <p className="text-[10px] font-sans text-warmgray text-center uppercase tracking-widest">
-          Cue Master -- AI Rehearsal Companion
+          Cue Master - AI Rehearsal Companion
         </p>
       </div>
     </div>
