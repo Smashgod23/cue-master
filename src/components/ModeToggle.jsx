@@ -49,8 +49,8 @@ export default function ModeToggle({ mode, onToggle }) {
 
       <p className="font-body text-xs text-warmgray italic mt-0.5">
         {isPerformance
-          ? "Lines hidden — speak from memory"
-          : "Lines visible — learn at your pace"}
+          ? "Lines hidden - speak from memory"
+          : "Lines visible - learn at your pace"}
       </p>
     </div>
   );

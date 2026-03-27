@@ -12,7 +12,7 @@ export default function ScriptView({ activeLine, onLineClick }) {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Script header — playbill style */}
+      {/* Script header - playbill style */}
       <div className="px-8 pt-6 pb-4 border-b border-parchment-deep">
         <div className="text-center">
           <h2 className="font-serif text-2xl font-bold text-ink tracking-wide">

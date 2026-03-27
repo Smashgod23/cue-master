@@ -1,7 +1,16 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export default function Home() {
   const navigate = useNavigate();
+  const [selectedMode, setSelectedMode] = useState(null);
+
+  const handleStart = () => {
+    if (selectedMode) {
+      sessionStorage.setItem("rehearsalMode", selectedMode);
+    }
+    navigate("/upload");
+  };
 
   return (
     <div className="min-h-screen bg-parchment flex flex-col">
@@ -33,7 +42,7 @@ export default function Home() {
           </p>
 
           <button
-            onClick={() => navigate("/upload")}
+            onClick={handleStart}
             className="mt-10 inline-flex items-center gap-3 px-8 py-4 rounded-xl
               bg-crimson text-white font-sans font-semibold text-base
               hover:bg-crimson-muted active:scale-[0.98] transition-all duration-200
@@ -46,13 +55,28 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Mode explanations */}
-        <div className="max-w-3xl w-full mt-16 grid sm:grid-cols-2 gap-6">
+        {/* Mode selection */}
+        <div className="max-w-3xl w-full mt-16">
+          <p className="font-sans text-xs text-warmgray uppercase tracking-widest text-center mb-5">
+            Choose your rehearsal mode {selectedMode && <span className="text-gold-deep font-medium normal-case tracking-normal">- {selectedMode} selected</span>}
+          </p>
+        </div>
+        <div className="max-w-3xl w-full grid sm:grid-cols-2 gap-6">
           {/* Performance Mode */}
-          <div className="bg-parchment-warm rounded-xl p-6 ring-1 ring-parchment-deep animate-fade-in-up" style={{ animationDelay: "100ms" }}>
+          <button
+            type="button"
+            onClick={() => setSelectedMode(selectedMode === "performance" ? null : "performance")}
+            className={`bg-parchment-warm rounded-xl p-6 text-left transition-all duration-200 cursor-pointer animate-fade-in-up
+              ${selectedMode === "performance"
+                ? "ring-2 ring-crimson shadow-md shadow-crimson/10 scale-[1.02]"
+                : "ring-1 ring-parchment-deep hover:ring-warmgray-light"
+              }`}
+            style={{ animationDelay: "100ms" }}
+          >
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-crimson/10 flex items-center justify-center">
-                <svg className="w-5 h-5 text-crimson" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors duration-200
+                ${selectedMode === "performance" ? "bg-crimson" : "bg-crimson/10"}`}>
+                <svg className={`w-5 h-5 transition-colors duration-200 ${selectedMode === "performance" ? "text-white" : "text-crimson"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="3" />
                   <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
                 </svg>
@@ -64,13 +88,23 @@ export default function Home() {
               volume, and emotional delivery, then interrupts with targeted notes when
               something needs work. Your script stays hidden so you rely on memory.
             </p>
-          </div>
+          </button>
 
           {/* Learning Mode */}
-          <div className="bg-parchment-warm rounded-xl p-6 ring-1 ring-parchment-deep animate-fade-in-up" style={{ animationDelay: "200ms" }}>
+          <button
+            type="button"
+            onClick={() => setSelectedMode(selectedMode === "learning" ? null : "learning")}
+            className={`bg-parchment-warm rounded-xl p-6 text-left transition-all duration-200 cursor-pointer animate-fade-in-up
+              ${selectedMode === "learning"
+                ? "ring-2 ring-gold-deep shadow-md shadow-gold/15 scale-[1.02]"
+                : "ring-1 ring-parchment-deep hover:ring-warmgray-light"
+              }`}
+            style={{ animationDelay: "200ms" }}
+          >
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-gold/15 flex items-center justify-center">
-                <svg className="w-5 h-5 text-gold-deep" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors duration-200
+                ${selectedMode === "learning" ? "bg-gold-deep" : "bg-gold/15"}`}>
+                <svg className={`w-5 h-5 transition-colors duration-200 ${selectedMode === "learning" ? "text-white" : "text-gold-deep"}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
                   <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
                 </svg>
@@ -82,7 +116,7 @@ export default function Home() {
               what you say against the expected text. Get it close enough and the scene
               advances. Miss it and you get a gentle nudge to try again.
             </p>
-          </div>
+          </button>
         </div>
 
         {/* AI Director explanation */}
@@ -114,7 +148,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="px-6 py-4 border-t border-parchment-deep bg-parchment-warm/60">
         <p className="text-[10px] font-sans text-warmgray text-center uppercase tracking-widest">
-          Cue Master — Everything runs locally on your machine. No cloud. No subscriptions.
+          Cue Master - Everything runs locally on your machine. No cloud. No subscriptions.
         </p>
       </footer>
     </div>

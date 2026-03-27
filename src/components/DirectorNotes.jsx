@@ -114,7 +114,7 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
                 No notes for this selection
               </p>
               <p className="font-body text-sm text-warmgray-light mt-1">
-                Keep rehearsing — feedback will appear as you perform
+                Keep rehearsing - feedback will appear as you perform
               </p>
             </div>
           ) : (

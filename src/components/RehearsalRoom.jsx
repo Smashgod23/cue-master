@@ -6,7 +6,10 @@ import DirectorNotes from "./DirectorNotes";
 import useRehearsalSocket from "../hooks/useRehearsalSocket";
 
 export default function RehearsalRoom() {
-  const [mode, setMode] = useState("learning");
+  const [mode, setMode] = useState(() => {
+    const saved = sessionStorage.getItem("rehearsalMode");
+    return saved === "performance" ? "performance" : "learning";
+  });
   const [notesOpen, setNotesOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
 

@@ -134,7 +134,7 @@ export default function Upload() {
                   Drop your script here
                 </p>
                 <p className="font-sans text-xs text-warmgray mt-2">
-                  or click to browse — accepts {ACCEPTED_EXTENSIONS}
+                  or click to browse - accepts {ACCEPTED_EXTENSIONS}
                 </p>
               </>
             )}

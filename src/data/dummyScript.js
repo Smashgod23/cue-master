@@ -1,11 +1,11 @@
-// Excerpt from "A Midsummer Night's Dream" — Act II, Scene I
+// Excerpt from "A Midsummer Night's Dream" - Act II, Scene I
 // Perfect for rehearsal demo: multiple characters, stage directions, varied line lengths
 
 export const scriptMeta = {
   title: "A Midsummer Night's Dream",
   playwright: "William Shakespeare",
   act: "Act II",
-  scene: "Scene I — A Wood Near Athens",
+  scene: "Scene I - A Wood Near Athens",
 };
 
 export const characters = {
@@ -31,7 +31,7 @@ export const scriptLines = [
     id: 3,
     type: "dialogue",
     character: "FAIRY",
-    text: "Over hill, over dale, thorough bush, thorough brier, over park, over pale, thorough flood, thorough fire — I do wander everywhere, swifter than the moon's sphere; and I serve the Fairy Queen, to dew her orbs upon the green.",
+    text: "Over hill, over dale, thorough bush, thorough brier, over park, over pale, thorough flood, thorough fire - I do wander everywhere, swifter than the moon's sphere; and I serve the Fairy Queen, to dew her orbs upon the green.",
   },
   {
     id: 4,
@@ -128,7 +128,7 @@ export const scriptLines = [
     id: 20,
     type: "dialogue",
     character: "OBERON",
-    text: "Well, go thy way. Thou shalt not from this grove till I torment thee for this injury. — My gentle Puck, come hither.",
+    text: "Well, go thy way. Thou shalt not from this grove till I torment thee for this injury. - My gentle Puck, come hither.",
   },
 ];
 
