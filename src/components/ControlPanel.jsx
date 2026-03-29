@@ -11,7 +11,7 @@ const liveStates = ["idle", "listening", "analyzing", "speaking"];
  *   userCharColor – hex color for the character badge
  *   …all previous props
  */
-export default function ControlPanel({ mode, onModeToggle, liveState, connected, onConnect, onDisconnect, onOpenNotes, userCharName, userCharColor }) {
+export default function ControlPanel({ mode, onModeToggle, liveState, connected, micError, onConnect, onDisconnect, onRestart, onOpenNotes, userCharName, userCharColor }) {
   // Demo cycler -- used only when WebSocket isn't connected
   const [demoIndex, setDemoIndex] = useState(0);
 
@@ -73,6 +73,13 @@ export default function ControlPanel({ mode, onModeToggle, liveState, connected,
 
         {/* Live indicator */}
         <LiveIndicator state={currentState} />
+
+        {/* Mic error banner */}
+        {micError && (
+          <div className="px-4 py-3 rounded-lg bg-crimson/8 border border-crimson/20 text-xs font-sans text-crimson leading-relaxed">
+            {micError}
+          </div>
+        )}
 
         {/* Demo control -- only show when not connected to WebSocket */}
         {!connected && (
@@ -143,10 +150,15 @@ export default function ControlPanel({ mode, onModeToggle, liveState, connected,
 
           {/* Restart scene */}
           <button
-            className="w-full flex items-center justify-center gap-2 py-3 px-5 rounded-xl
-              bg-parchment text-ink-muted font-sans font-medium text-sm
-              ring-1 ring-parchment-deep hover:ring-warmgray-light
-              active:scale-[0.98] transition-all duration-200 cursor-pointer"
+            onClick={onRestart}
+            disabled={!connected}
+            className={`w-full flex items-center justify-center gap-2 py-3 px-5 rounded-xl
+              font-sans font-medium text-sm ring-1
+              active:scale-[0.98] transition-all duration-200
+              ${connected
+                ? "bg-parchment text-ink-muted ring-parchment-deep hover:ring-warmgray-light cursor-pointer"
+                : "bg-parchment text-warmgray-lighter ring-parchment-deep cursor-not-allowed opacity-50"
+              }`}
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="1 4 1 10 7 10" />

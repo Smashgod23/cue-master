@@ -176,8 +176,10 @@ export default function RehearsalRoom() {
             onModeToggle={toggleMode}
             liveState={ws.status}
             connected={ws.connected}
+            micError={ws.micError}
             onConnect={() => ws.connect(mode, userCharKey)}
             onDisconnect={ws.disconnect}
+            onRestart={() => { ws.disconnect(); setTimeout(() => ws.connect(mode, userCharKey), 300); }}
             userCharName={userCharInfo?.name}
             userCharColor={userCharInfo?.color}
             onOpenNotes={() => {

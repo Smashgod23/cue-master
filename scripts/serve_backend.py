@@ -207,7 +207,20 @@ def parse_script_text(raw_text: str) -> list[dict]:
         })
     }
 
-    lines = raw_text.split("\n")
+    # Detect repeated page-header strings (appear on 3+ pages) so we can strip them
+    # E.g. the play title "Whodunit?" printed at the top of every page
+    all_raw_lines = raw_text.split("\n")
+    line_freq: Counter = Counter(
+        l.strip() for l in all_raw_lines
+        if l.strip() and len(l.strip()) <= 60 and not l.strip()[0].islower()
+    )
+    # Any short non-lowercase line that appears 4+ times is probably a header/footer
+    page_noise = {text for text, cnt in line_freq.items() if cnt >= 4}
+
+    # Also strip bare page numbers (lines that are just digits, optionally with spaces)
+    _page_num_re = re.compile(r"^\s*\d{1,3}\s*$")
+
+    lines = all_raw_lines
     result = []
     current_character = None
     current_text_parts = []
@@ -230,6 +243,29 @@ def parse_script_text(raw_text: str) -> list[dict]:
     for line in lines:
         stripped = line.strip()
         if not stripped:
+            continue
+
+        # Skip bare page numbers and repeated page headers/footers
+        if _page_num_re.match(stripped) or stripped in page_noise:
+            continue
+
+        # Section headers like "SCENE:", "SETTING:", "PLACE:" flush dialogue and
+        # become stage directions rather than being swallowed as dialogue continuation
+        _section_header = re.match(
+            r"^(SCENE|SETTING|PLACE|TIME|ACT\s+\w+|SCENE\s+\w+)\b[:.]\s*(.*)",
+            stripped, re.IGNORECASE
+        )
+        if _section_header:
+            flush_dialogue()
+            rest = _section_header.group(2).strip()
+            if rest:
+                result.append({
+                    "id": line_id,
+                    "type": "stage_direction",
+                    "character": "",
+                    "text": rest,
+                })
+                line_id += 1
             continue
 
         if STAGE_DIR_PATTERN.match(stripped):

@@ -21,6 +21,7 @@ export default function useRehearsalSocket() {
   const [notes, setNotes] = useState([]);
   const [activeLine, setActiveLine] = useState(1);
   const [connected, setConnected] = useState(false);
+  const [micError, setMicError] = useState(null);
 
   // ------------------------------------------------------------------
   // Incoming message handler
@@ -72,6 +73,7 @@ export default function useRehearsalSocket() {
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
         video: false,
       });
+      setMicError(null);
       streamRef.current = stream;
 
       const ctx = new AudioContext();
@@ -92,6 +94,10 @@ export default function useRehearsalSocket() {
       source.connect(worklet);
       // worklet output not connected to speakers (we don't want mic feedback)
     } catch (err) {
+      const msg = err.name === "NotAllowedError"
+        ? "Microphone access denied. Allow mic access in your browser and try again."
+        : `Microphone unavailable: ${err.message}`;
+      setMicError(msg);
       console.error("Mic capture failed:", err);
     }
   }, []);
@@ -128,6 +134,8 @@ export default function useRehearsalSocket() {
       ws.addEventListener("open", () => {
         setConnected(true);
         setStatus("listening");
+        setNotes([]);         // clear notes from any previous session
+        setMicError(null);
         // Tell the backend which mode and character we're using
         ws.send(JSON.stringify({ event: "init", mode, character }));
         // Start streaming microphone audio
@@ -174,7 +182,7 @@ export default function useRehearsalSocket() {
     };
   }, [stopMicCapture]);
 
-  return { status, notes, activeLine, connected, connect, disconnect };
+  return { status, notes, activeLine, connected, micError, connect, disconnect };
 }
 
 // ---------------------------------------------------------------------------

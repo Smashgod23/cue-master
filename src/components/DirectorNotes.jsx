@@ -133,7 +133,7 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
               </p>
             </div>
           ) : (
-            filteredNotes.map((note) => {
+            filteredNotes.map((note, idx) => {
               const style = severityStyles[note.severity] || severityStyles.note;
               const referencedLine = scriptLines.find((l) => l.id === note.lineId);
               const charInfo = referencedLine?.character
@@ -144,7 +144,7 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
                 <div
                   key={note.id}
                   className={`p-5 rounded-xl border ${style.border} ${style.bg} animate-fade-in-up`}
-                  style={{ animationDelay: `${note.id * 60}ms` }}
+                  style={{ animationDelay: `${idx * 60}ms` }}
                 >
                   {/* Note header */}
                   <div className="flex items-center gap-2 mb-2.5">

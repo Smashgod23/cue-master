@@ -124,7 +124,7 @@ export default function ScriptView({ lines, meta, userCharKey, charMap, activeLi
                     : "bg-gold/8 ring-1 ring-gold/25"
                   : "hover:bg-parchment-warm/60"
                 }
-                ${isUserLine ? "pl-5 border-l-3 border-crimson/40" : ""}
+                ${isUserLine ? "pl-5 border-l-[3px] border-crimson/40" : ""}
               `}
             >
               <span
