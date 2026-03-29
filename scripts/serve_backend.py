@@ -663,7 +663,8 @@ async def ws_rehearsal(websocket: WebSocket):
 
                 if data.get("event") == "init":
                     mode = data.get("mode", "learning")
-                    character = data.get("character", "OBERON")
+                    # Normalise to ALL CAPS to match parsed script character names
+                    character = data.get("character", "OBERON").upper().strip()
                     session = RehearsalSession(
                         mode=mode,
                         character=character,

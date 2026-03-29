@@ -1,11 +1,17 @@
 import { useState } from "react";
 import ModeToggle from "./ModeToggle";
 import LiveIndicator from "./LiveIndicator";
-import { userCharacter, characters } from "../data/dummyScript";
+import { userCharacter as dummyUserChar, characters as dummyChars } from "../data/dummyScript";
 
 const liveStates = ["idle", "listening", "analyzing", "speaking"];
 
-export default function ControlPanel({ mode, onModeToggle, liveState, connected, onConnect, onDisconnect, onOpenNotes }) {
+/**
+ * Props:
+ *   userCharName  – display name of the rehearsing character (e.g. "Oberon")
+ *   userCharColor – hex color for the character badge
+ *   …all previous props
+ */
+export default function ControlPanel({ mode, onModeToggle, liveState, connected, onConnect, onDisconnect, onOpenNotes, userCharName, userCharColor }) {
   // Demo cycler -- used only when WebSocket isn't connected
   const [demoIndex, setDemoIndex] = useState(0);
 
@@ -14,7 +20,12 @@ export default function ControlPanel({ mode, onModeToggle, liveState, connected,
   };
 
   const currentState = connected ? liveState : liveStates[demoIndex];
-  const userChar = characters[userCharacter];
+  // Fall back to demo character when no real setup exists
+  const fallback = dummyChars[dummyUserChar];
+  const userChar = {
+    name: userCharName || fallback.name,
+    color: userCharColor || fallback.color,
+  };
 
   return (
     <div className="h-full flex flex-col bg-parchment-warm/40">

@@ -1,8 +1,28 @@
 import { useRef, useEffect } from "react";
-import { scriptLines, characters, userCharacter, scriptMeta } from "../data/dummyScript";
+import {
+  scriptLines as dummyLines,
+  characters as dummyChars,
+  userCharacter as dummyUserChar,
+  scriptMeta as dummyMeta,
+} from "../data/dummyScript";
 
-export default function ScriptView({ activeLine, onLineClick }) {
+/**
+ * Props:
+ *   lines        – array of parsed script line objects (falls back to dummyLines)
+ *   meta         – { title, playwright, act, scene }
+ *   userCharKey  – ALL-CAPS character key matching line.character (e.g. "OBERON")
+ *   charMap      – { "OBERON": { name: "Oberon", color: "#8B2035" }, … }
+ *   activeLine   – id of the currently active line
+ *   onLineClick  – callback(id)
+ */
+export default function ScriptView({ lines, meta, userCharKey, charMap, activeLine, onLineClick }) {
   const activeRef = useRef(null);
+
+  // Fall back to demo data when real script hasn't been loaded yet
+  const scriptLines = lines && lines.length > 0 ? lines : dummyLines;
+  const scriptMeta = meta || dummyMeta;
+  const userCharacter = userCharKey || dummyUserChar;
+  const characters = charMap || dummyChars;
 
   useEffect(() => {
     if (activeRef.current) {
@@ -12,24 +32,34 @@ export default function ScriptView({ activeLine, onLineClick }) {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Script header - playbill style */}
+      {/* Script header */}
       <div className="px-8 pt-6 pb-4 border-b border-parchment-deep">
         <div className="text-center">
           <h2 className="font-serif text-2xl font-bold text-ink tracking-wide">
             {scriptMeta.title}
           </h2>
-          <p className="font-serif text-sm italic text-ink-muted mt-1">
-            by {scriptMeta.playwright}
-          </p>
-          <div className="mt-3 flex items-center justify-center gap-4">
-            <span className="text-xs font-sans font-medium uppercase tracking-widest text-warmgray">
-              {scriptMeta.act}
-            </span>
-            <span className="w-1 h-1 rounded-full bg-gold" />
-            <span className="text-xs font-sans font-medium uppercase tracking-widest text-warmgray">
-              {scriptMeta.scene}
-            </span>
-          </div>
+          {scriptMeta.playwright && (
+            <p className="font-serif text-sm italic text-ink-muted mt-1">
+              by {scriptMeta.playwright}
+            </p>
+          )}
+          {(scriptMeta.act || scriptMeta.scene) && (
+            <div className="mt-3 flex items-center justify-center gap-4">
+              {scriptMeta.act && (
+                <span className="text-xs font-sans font-medium uppercase tracking-widest text-warmgray">
+                  {scriptMeta.act}
+                </span>
+              )}
+              {scriptMeta.act && scriptMeta.scene && (
+                <span className="w-1 h-1 rounded-full bg-gold" />
+              )}
+              {scriptMeta.scene && (
+                <span className="text-xs font-sans font-medium uppercase tracking-widest text-warmgray">
+                  {scriptMeta.scene}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Character legend */}
@@ -71,10 +101,7 @@ export default function ScriptView({ activeLine, onLineClick }) {
                 ref={isActive ? activeRef : null}
                 onClick={() => onLineClick(line.id)}
                 className={`py-3 px-5 cursor-pointer rounded-lg transition-all duration-300
-                  ${isActive
-                    ? "bg-gold/10 ring-1 ring-gold/30"
-                    : "hover:bg-parchment-warm/60"
-                  }`}
+                  ${isActive ? "bg-gold/10 ring-1 ring-gold/30" : "hover:bg-parchment-warm/60"}`}
               >
                 <p className="font-body text-base italic text-ink-muted leading-relaxed">
                   [{line.text}]

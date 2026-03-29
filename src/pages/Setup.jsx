@@ -1,8 +1,26 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
+
+// Derive the unique character names from the parsed script stored by Upload
+function getScriptCharacters() {
+  try {
+    const raw = sessionStorage.getItem("parsedScript");
+    if (!raw) return [];
+    const lines = JSON.parse(raw);
+    const seen = new Set();
+    lines.forEach((l) => {
+      if (l.type === "dialogue" && l.character) seen.add(l.character);
+    });
+    // Title-case for display (e.g. "OBERON" -> "Oberon")
+    return [...seen].map((c) => c.charAt(0) + c.slice(1).toLowerCase());
+  } catch {
+    return [];
+  }
+}
 
 export default function Setup() {
   const navigate = useNavigate();
+  const detectedChars = useMemo(() => getScriptCharacters(), []);
   const [playName, setPlayName] = useState("");
   const [characterName, setCharacterName] = useState("");
   const [notes, setNotes] = useState("");
@@ -120,6 +138,7 @@ export default function Setup() {
                 <input
                   id="character-name"
                   type="text"
+                  list="character-suggestions"
                   value={characterName}
                   onChange={(e) => setCharacterName(e.target.value)}
                   placeholder="Oberon"
@@ -128,6 +147,16 @@ export default function Setup() {
                     focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold/30
                     transition-all duration-200"
                 />
+                {detectedChars.length > 0 && (
+                  <>
+                    <datalist id="character-suggestions">
+                      {detectedChars.map((c) => <option key={c} value={c} />)}
+                    </datalist>
+                    <p className="mt-1.5 font-sans text-[11px] text-warmgray">
+                      Detected in your script: {detectedChars.join(", ")}
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Notes */}

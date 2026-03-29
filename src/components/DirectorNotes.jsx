@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { directorNotes, scriptLines, characters } from "../data/dummyScript";
+import { directorNotes as dummyNotes, scriptLines as dummyLines, characters as dummyChars } from "../data/dummyScript";
 
 const severityStyles = {
   note: {
@@ -29,11 +29,26 @@ const typeLabels = {
   blocking: "Blocking",
 };
 
-export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes }) {
+/**
+ * Props:
+ *   allLines  – full script line array for line-reference previews
+ *   charMap   – character display map { "OBERON": { name, color }, … }
+ *   liveNotes – director note objects from the WebSocket
+ *   isUploaded – true when a real script is loaded (suppresses dummy note fallback)
+ */
+export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes, allLines, charMap, isUploaded }) {
   const [filter, setFilter] = useState("all");
 
-  // Use live WebSocket notes when available, otherwise fall back to dummy data
-  const sourceNotes = liveNotes && liveNotes.length > 0 ? liveNotes : directorNotes;
+  const scriptLines = allLines && allLines.length > 0 ? allLines : dummyLines;
+  const characters = charMap || dummyChars;
+
+  // When a real script is loaded, don't fall back to dummy notes
+  const sourceNotes =
+    liveNotes && liveNotes.length > 0
+      ? liveNotes
+      : isUploaded
+        ? []
+        : dummyNotes;
 
   const filteredNotes =
     filter === "all"
