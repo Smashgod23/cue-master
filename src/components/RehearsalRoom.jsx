@@ -4,6 +4,7 @@ import ScriptView from "./ScriptView";
 import ControlPanel from "./ControlPanel";
 import DirectorNotes from "./DirectorNotes";
 import useRehearsalSocket from "../hooks/useRehearsalSocket";
+import { userCharacter } from "../data/dummyScript";
 
 export default function RehearsalRoom() {
   const [mode, setMode] = useState(() => {
@@ -110,7 +111,7 @@ export default function RehearsalRoom() {
             onModeToggle={toggleMode}
             liveState={ws.status}
             connected={ws.connected}
-            onConnect={ws.connect}
+            onConnect={() => ws.connect(mode, userCharacter)}
             onDisconnect={ws.disconnect}
             onOpenNotes={() => {
               setNotesOpen(true);
