@@ -164,12 +164,28 @@ def extract_text_from_image(file_path: str) -> str:
 
 
 def parse_script_text(raw_text: str) -> list[dict]:
-    potential_characters = set()
+    from collections import Counter
+
+    false_positives = {
+        "ACT", "SCENE", "ACT I", "ACT II", "ACT III", "ACT IV", "ACT V",
+        "PROLOGUE", "EPILOGUE", "INTERMISSION",
+        # Structural document keywords that appear as all-caps headers
+        "NOTICE", "COPYRIGHT", "PUBLISHING", "COMPANY", "POSITIONS", "CHART",
+        "PROPERTIES", "PLACE", "TIME", "CHARACTERS", "RISE", "BEFORE", "BACKING",
+        "ISBN", "PRINTED", "NOTE", "CURTAIN", "STAGE", "INTERIOR", "EXTERIOR",
+        "SETTING", "LIGHTS", "MUSIC", "SOUND", "END", "FADE", "CUT", "BLACKOUT",
+        "PRODUCTION", "RIGHTS", "RESERVED", "ALL RIGHTS RESERVED", "CAUTION",
+        "PRINTED IN USA", "DRAMATIC PUBLISHING", "CURTAIN LINE",
+        # Honorific abbreviations that appear mid-text (not standalone character names)
+        "MR", "MRS", "MS", "DR", "SR", "JR",
+    }
+
+    name_counter: Counter = Counter()
 
     for match in CHARACTER_PATTERN.finditer(raw_text):
         name = match.group(1).strip().rstrip(":.")
         if len(name) >= 2:
-            potential_characters.add(name)
+            name_counter[name] += 1
 
     inline_pattern = re.compile(
         r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*[:.][ \t]+\S",
@@ -178,13 +194,18 @@ def parse_script_text(raw_text: str) -> list[dict]:
     for match in inline_pattern.finditer(raw_text):
         name = match.group(1).strip()
         if len(name) >= 2:
-            potential_characters.add(name)
+            name_counter[name] += 1
 
-    false_positives = {
-        "ACT", "SCENE", "ACT I", "ACT II", "ACT III", "ACT IV", "ACT V",
-        "PROLOGUE", "EPILOGUE", "INTERMISSION",
+    potential_characters = {
+        name for name, count in name_counter.items()
+        if count >= 3                          # must appear ≥3 times
+        and len(name.split()) <= 3             # no long phrases (e.g. "CHART OF STAGE POSITIONS")
+        and name not in false_positives
+        and not any(fp in name for fp in {    # reject names containing structural keywords
+            "COPYRIGHT", "PUBLISHING", "DRAMATIC", "CURTAIN LINE",
+            "ALL RIGHTS", "STAGE POSITION", "PRINTED",
+        })
     }
-    potential_characters -= false_positives
 
     lines = raw_text.split("\n")
     result = []
