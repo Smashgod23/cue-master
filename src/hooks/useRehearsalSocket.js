@@ -28,7 +28,8 @@ export default function useRehearsalSocket() {
   // ------------------------------------------------------------------
   const handleMessage = useCallback((event) => {
     if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
-      playAudioBlob(event.data instanceof Blob ? event.data : new Blob([event.data]), setStatus);
+      const blob = event.data instanceof Blob ? event.data : new Blob([event.data]);
+      playAudioBlob(blob, setStatus, wsRef.current);
       return;
     }
 
@@ -188,7 +189,7 @@ export default function useRehearsalSocket() {
 // ---------------------------------------------------------------------------
 // Audio playback helper
 // ---------------------------------------------------------------------------
-function playAudioBlob(blob, setStatus) {
+function playAudioBlob(blob, setStatus, ws) {
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
 
@@ -197,6 +198,10 @@ function playAudioBlob(blob, setStatus) {
   const cleanup = () => {
     setStatus("listening");
     URL.revokeObjectURL(url);
+    // Tell the backend playback is done so it can advance without guessing timing
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ event: "audio_done" }));
+    }
   };
 
   audio.addEventListener("ended", cleanup);

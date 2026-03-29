@@ -18,7 +18,9 @@ import {
 export default function ScriptView({ lines, meta, userCharKey, charMap, activeLine, onLineClick }) {
   const activeRef = useRef(null);
 
-  // Fall back to demo data when real script hasn't been loaded yet
+  // `lines` being an empty array means an upload happened but parsing found nothing
+  const parseFailed = Array.isArray(lines) && lines.length === 0;
+  // Fall back to demo data only when no upload has been attempted (lines is null)
   const scriptLines = lines && lines.length > 0 ? lines : dummyLines;
   const scriptMeta = meta || dummyMeta;
   const userCharacter = userCharKey || dummyUserChar;
@@ -29,6 +31,25 @@ export default function ScriptView({ lines, meta, userCharKey, charMap, activeLi
       activeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [activeLine]);
+
+  if (parseFailed) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center p-12 text-center">
+        <div className="w-14 h-14 rounded-xl bg-crimson/10 flex items-center justify-center mb-5">
+          <svg className="w-7 h-7 text-crimson" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+        </div>
+        <h3 className="font-serif text-xl font-bold text-ink">Script could not be parsed</h3>
+        <p className="font-body text-sm text-ink-soft mt-3 max-w-sm leading-relaxed">
+          No dialogue or stage directions were found. Make sure character names appear
+          in ALL CAPS followed by a colon, or try uploading a different file format.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">

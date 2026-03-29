@@ -6,9 +6,8 @@ export default function Home() {
   const [selectedMode, setSelectedMode] = useState(null);
 
   const handleStart = () => {
-    if (selectedMode) {
-      sessionStorage.setItem("rehearsalMode", selectedMode);
-    }
+    // Default to learning if the user didn't pick
+    sessionStorage.setItem("rehearsalMode", selectedMode || "learning");
     navigate("/upload");
   };
 
@@ -40,25 +39,12 @@ export default function Home() {
             to your delivery, reads your scene partner's lines, and gives you
             real-time feedback on pacing, volume, and emotion.
           </p>
-
-          <button
-            onClick={handleStart}
-            className="mt-10 inline-flex items-center gap-3 px-8 py-4 rounded-xl
-              bg-crimson text-white font-sans font-semibold text-base
-              hover:bg-crimson-muted active:scale-[0.98] transition-all duration-200
-              shadow-lg shadow-crimson/25 cursor-pointer"
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-              <polygon points="5 3 19 12 5 21 5 3" />
-            </svg>
-            Start Rehearsal
-          </button>
         </div>
 
         {/* Mode selection */}
-        <div className="max-w-3xl w-full mt-16">
+        <div className="max-w-3xl w-full mt-14">
           <p className="font-sans text-xs text-warmgray uppercase tracking-widest text-center mb-5">
-            Choose your rehearsal mode {selectedMode && <span className="text-gold-deep font-medium normal-case tracking-normal">- {selectedMode} selected</span>}
+            Choose your rehearsal mode
           </p>
         </div>
         <div className="max-w-3xl w-full grid sm:grid-cols-2 gap-6">
@@ -142,6 +128,27 @@ export default function Home() {
               that's specific to your scene, not generic acting advice.
             </p>
           </div>
+        </div>
+
+        {/* CTA — below mode cards so mode selection happens first */}
+        <div className="max-w-3xl w-full mt-8 flex flex-col items-center gap-3 animate-fade-in-up" style={{ animationDelay: "400ms" }}>
+          <button
+            onClick={handleStart}
+            className="inline-flex items-center gap-3 px-8 py-4 rounded-xl
+              bg-crimson text-white font-sans font-semibold text-base
+              hover:bg-crimson-muted active:scale-[0.98] transition-all duration-200
+              shadow-lg shadow-crimson/25 cursor-pointer"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            {selectedMode ? `Start in ${selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1)} Mode` : "Start Rehearsal"}
+          </button>
+          {!selectedMode && (
+            <p className="font-sans text-xs text-warmgray">
+              No mode selected — will default to Learning Mode
+            </p>
+          )}
         </div>
       </main>
 

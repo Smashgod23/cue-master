@@ -359,7 +359,7 @@ def _build_rag_index(play: str, character: str, notes: str) -> int:
     Run DuckDuckGo searches, scrape top results, chunk, embed,
     and store in ChromaDB. Returns the number of chunks indexed.
     """
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 
     queries = [
         f"{play} {character} acting analysis",
@@ -571,6 +571,8 @@ class RehearsalSession:
     speech_buffer: bytearray = field(default_factory=bytearray)
     silence_chunks: int = 0
     is_speech_active: bool = False
+    # Set by client when audio playback finishes so _cue_next doesn't guess timing
+    audio_done: asyncio.Event = field(default_factory=asyncio.Event)
 
     def current_line(self) -> Optional[dict]:
         if 0 <= self.current_idx < len(self.dialogue_lines):
@@ -612,9 +614,15 @@ async def _cue_next(ws: WebSocket, session: RehearsalSession, loop):
         await ws.send_text(json.dumps({"event": "status", "state": "speaking"}))
         try:
             wav_bytes = await loop.run_in_executor(_executor, _tts, line["text"])
+            session.audio_done.clear()
             await ws.send_bytes(wav_bytes)
-            # Give the client time to start playing before we advance further
-            await asyncio.sleep(max(0.5, len(line["text"].split()) * 0.4))
+            # Wait for client to signal playback complete; fall back after generous timeout
+            word_count = len(line["text"].split())
+            timeout = max(5.0, word_count * 0.6)
+            try:
+                await asyncio.wait_for(session.audio_done.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
         except Exception as e:
             print(f"TTS error line {line['id']}: {e}")
         session.advance()
@@ -639,19 +647,42 @@ async def _apply_director(ws: WebSocket, session: RehearsalSession, result: dict
     volume = result["volume"]
 
     if session.mode == "learning":
+        import numpy as np
         from rapidfuzz import fuzz
-        score = fuzz.partial_ratio(spoken.lower(), expected.lower())
 
-        if score >= 80:
+        fuzzy_score = fuzz.partial_ratio(spoken.lower(), expected.lower())
+
+        # Semantic similarity using the already-loaded embedder (reuse RAG model)
+        semantic_score = 0.0
+        if spoken.strip() and expected.strip():
+            try:
+                embedder = _get_embedder()
+                embs = await loop.run_in_executor(
+                    _executor,
+                    lambda: embedder.encode([spoken, expected], show_progress_bar=False),
+                )
+                a, b = embs[0], embs[1]
+                denom = (np.linalg.norm(a) * np.linalg.norm(b))
+                if denom > 0:
+                    semantic_score = float(np.dot(a, b) / denom)
+            except Exception as e:
+                print(f"Semantic scoring failed: {e}")
+
+        # Accept if the actor got it right character-by-character OR said the same thing
+        accepted = fuzzy_score >= 78 or semantic_score >= 0.82
+
+        if accepted:
             session.advance()
             await _cue_next(ws, session, loop)
         else:
+            # Give a more specific hint based on which dimension failed
+            if fuzzy_score >= 55:
+                hint = f'Close — the exact wording is: "{expected[:120]}"'
+            else:
+                hint = f'Not quite. The line is: "{expected[:120]}"'
             await ws.send_text(json.dumps({
                 "event": "director_note",
-                "note": (
-                    f'Not quite. The line is: "{expected[:120]}" — '
-                    f"try again with more confidence."
-                ),
+                "note": hint,
                 "severity": "note",
                 "type": "accuracy",
                 "lineId": line["id"],
@@ -700,12 +731,23 @@ async def _apply_director(ws: WebSocket, session: RehearsalSession, result: dict
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 
+async def _ping_loop(ws: WebSocket, interval: int = 30):
+    """Send a ping every `interval` seconds to keep the connection alive."""
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            await ws.send_text(json.dumps({"event": "ping"}))
+    except Exception:
+        pass
+
+
 @app.websocket("/ws/rehearsal")
 async def ws_rehearsal(websocket: WebSocket):
     await websocket.accept()
     session: Optional[RehearsalSession] = None
     loop = asyncio.get_running_loop()
     vad_model = None
+    ping_task = asyncio.create_task(_ping_loop(websocket))
 
     try:
         while True:
@@ -716,6 +758,12 @@ async def ws_rehearsal(websocket: WebSocket):
                 try:
                     data = json.loads(message["text"])
                 except json.JSONDecodeError:
+                    continue
+
+                # Client signals that TTS audio finished playing
+                if data.get("event") == "audio_done":
+                    if session:
+                        session.audio_done.set()
                     continue
 
                 if data.get("event") == "init":
@@ -787,6 +835,8 @@ async def ws_rehearsal(websocket: WebSocket):
             await websocket.close()
         except Exception:
             pass
+    finally:
+        ping_task.cancel()
 
 
 # ---------------------------------------------------------------------------
