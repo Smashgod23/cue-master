@@ -196,16 +196,73 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if len(name) >= 2:
             name_counter[name] += 1
 
+    _structural_kw = {"COPYRIGHT", "PUBLISHING", "DRAMATIC", "CURTAIN LINE",
+                      "ALL RIGHTS", "STAGE POSITION", "PRINTED"}
+
+    def _is_valid_char_name(name: str, count: int) -> bool:
+        words = name.split()
+        if len(words) > 3:
+            return False
+        if name in false_positives:
+            return False
+        if any(kw in name for kw in _structural_kw):
+            return False
+        # Require ≥3 appearances for long names; ≥2 for short names (one-off characters)
+        min_count = 2 if len(words) <= 2 else 3
+        return count >= min_count
+
     potential_characters = {
         name for name, count in name_counter.items()
-        if count >= 3                          # must appear ≥3 times
-        and len(name.split()) <= 3             # no long phrases (e.g. "CHART OF STAGE POSITIONS")
-        and name not in false_positives
-        and not any(fp in name for fp in {    # reject names containing structural keywords
-            "COPYRIGHT", "PUBLISHING", "DRAMATIC", "CURTAIN LINE",
-            "ALL RIGHTS", "STAGE POSITION", "PRINTED",
-        })
+        if _is_valid_char_name(name, count)
     }
+
+    # Second-pass discovery: find ALL-CAPS sequences mid-paragraph that look like
+    # character cues (NAME. or NAME: followed immediately by dialogue text) but were
+    # missed because they appear only once (e.g. FIRST BEARER, SECOND BEARER).
+    # We add them to potential_characters so the mid-text splitter catches them.
+    def _is_structurally_valid(name: str) -> bool:
+        """Check only the structural rules (no frequency requirement)."""
+        words = name.split()
+        if len(words) > 2:
+            return False
+        if name in false_positives:
+            return False
+        return not any(kw in name for kw in _structural_kw)
+
+    # Names that are a trailing word of an already-known multi-word character should
+    # not be added as a separate character (e.g. "SOUTH" from "MR. SOUTH").
+    _name_suffixes = {
+        part
+        for name in list(potential_characters)
+        for part in name.split()
+        if len(name.split()) > 1
+    }
+
+    _mid_discovery_re = re.compile(
+        r'(?<=[.?!])\s+([A-Z][A-Z]{1,}(?:\s+[A-Z]{2,})?)\s*[.:](?=\s+[A-Z])'
+    )
+    for m in _mid_discovery_re.finditer(raw_text):
+        cand = m.group(1).strip()
+        # Skip if this is just a component word of an existing multi-word character
+        if cand in _name_suffixes:
+            continue
+        if _is_structurally_valid(cand):
+            potential_characters.add(cand)
+
+    # Pre-process: insert newlines before known character names buried mid-paragraph.
+    # pdfplumber collapses multi-column / complex layout into one long line, so
+    # "...I hope? FIRST BEARER. Never broke yet. SECOND BEARER. Holds up..." never
+    # gets split by the line-by-line parser. We fix this before splitting.
+    if potential_characters:
+        sorted_chars = sorted(potential_characters, key=len, reverse=True)
+        escaped = [re.escape(c) for c in sorted_chars]
+        # Match a character name that:
+        #   - is preceded by sentence-ending punctuation + whitespace (mid-paragraph)
+        #   - is followed by optional whitespace then [.:]  OR  a stage-direction bracket
+        mid_char_re = re.compile(
+            r'(?<=[.?!])\s+(' + "|".join(escaped) + r')(?=\s*[.:[\(])'
+        )
+        raw_text = mid_char_re.sub(r"\n\1", raw_text)
 
     # Detect repeated page-header strings (appear on 3+ pages) so we can strip them
     # E.g. the play title "Whodunit?" printed at the top of every page
@@ -226,10 +283,28 @@ def parse_script_text(raw_text: str) -> list[dict]:
     current_text_parts = []
     line_id = 1
 
+    # Matches inline stage directions embedded in dialogue, including OCR-mangled brackets.
+    # OCR commonly corrupts [ as \, l, or { and ] as l, ], or }
+    _inline_stage_re = re.compile(
+        r'\[.*?\]'              # [standard stage direction]
+        r'|\(.*?\)'             # (parenthetical direction)
+        r'|\{[^}]{0,80}\}'      # {OCR curly-bracket variant}
+        r'|\\[A-Z][^\\]{0,80}\\' # \They sit at the table\ (OCR-mangled brackets)
+        r'|\\\^[^\\.]{0,80}\\'  # \^pleading\ OCR variant
+        r'|\[-[^\]]{0,60}\]',   # [-direction-] OCR variant
+        re.DOTALL,
+    )
+
     def flush_dialogue():
         nonlocal line_id, current_character, current_text_parts
         if current_character and current_text_parts:
             text = " ".join(current_text_parts).strip()
+            # Strip inline stage directions so they don't pollute spoken text
+            text = _inline_stage_re.sub("", text)
+            # Collapse extra whitespace left behind
+            text = re.sub(r"\s{2,}", " ", text).strip()
+            # Drop trailing punctuation artifacts from stripped directions
+            text = re.sub(r"^[.,:;]+\s*", "", text)
             if text:
                 result.append({
                     "id": line_id,
@@ -282,7 +357,9 @@ def parse_script_text(raw_text: str) -> list[dict]:
             continue
 
         char_inline = re.match(
-            r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*[:.][ \t]*(.*)",
+            # Allow optional inline stage direction between name and delimiter:
+            # "ANNOUNCER [pleading]. Any lady..." or "MR. SOUTH: Darling..."
+            r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*(?:\[[^\]]{0,60}\][ \t]*)?[:.][ \t]*(.*)",
             stripped,
         )
         if char_inline:
