@@ -145,22 +145,112 @@ STAGE_DIR_PATTERN = re.compile(
 )
 
 
+# Lazily loaded EasyOCR reader (shared across calls)
+_easyocr_reader = None
+
+
+def _get_ocr_reader():
+    global _easyocr_reader
+    if _easyocr_reader is None:
+        import easyocr
+        print("Loading EasyOCR (English)…")
+        # gpu=False keeps it portable; set True if you have CUDA
+        _easyocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        print("EasyOCR ready.")
+    return _easyocr_reader
+
+
+def _easyocr_image_to_text(image) -> str:
+    """
+    Run EasyOCR on a PIL Image and return a properly ordered string.
+    Boxes are sorted top-to-bottom, then left-to-right within each row,
+    so character cues that start a new line come out on their own line.
+    """
+    import numpy as np
+    reader = _get_ocr_reader()
+    img_array = np.array(image)
+    results = reader.readtext(img_array, detail=1, paragraph=False)
+
+    if not results:
+        return ""
+
+    # Each result: (bbox, text, confidence) where bbox = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
+    # Estimate a row-height tolerance from the median box height
+    import statistics
+    box_heights = []
+    filtered = []
+    for bbox, text, conf in results:
+        if conf < 0.2:
+            continue
+        h = max(pt[1] for pt in bbox) - min(pt[1] for pt in bbox)
+        box_heights.append(h)
+        filtered.append((bbox, text))
+
+    if not filtered:
+        return ""
+
+    # Use half the median box height as the row-grouping tolerance
+    row_tol = max(8, statistics.median(box_heights) * 0.6)
+
+    # Group into rows by vertical centre position
+    rows: list[list[tuple]] = []
+    for bbox, text in filtered:
+        top_y = min(pt[1] for pt in bbox)
+        bot_y = max(pt[1] for pt in bbox)
+        mid_y = (top_y + bot_y) / 2
+        left_x = min(pt[0] for pt in bbox)
+        placed = False
+        for row in rows:
+            row_mid = row[0][0]
+            if abs(mid_y - row_mid) <= row_tol:
+                row.append((mid_y, left_x, text))
+                placed = True
+                break
+        if not placed:
+            rows.append([(mid_y, left_x, text)])
+
+    # Sort rows top-to-bottom, then tokens left-to-right within each row
+    rows.sort(key=lambda r: r[0][0])
+    lines = []
+    for row in rows:
+        row.sort(key=lambda item: item[1])
+        lines.append(" ".join(item[2] for item in row))
+
+    return "\n".join(lines)
+
+
 def extract_text_from_pdf(file_path: str) -> str:
+    """
+    Extract text from a PDF. For pages with embedded text, use pdfplumber directly
+    (fast, perfect quality). For scanned/image pages where pdfplumber returns nothing,
+    fall back to EasyOCR on the rendered page image.
+    """
     import pdfplumber
+    from PIL import Image as PILImage
+
     pages = []
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
-            if text:
+            if text and text.strip():
                 pages.append(text)
+            else:
+                # Scanned page — render to image and run EasyOCR
+                try:
+                    pil_img = page.to_image(resolution=200).original
+                    ocr_text = _easyocr_image_to_text(pil_img)
+                    if ocr_text.strip():
+                        pages.append(ocr_text)
+                except Exception as e:
+                    print(f"EasyOCR fallback failed for page: {e}")
     return "\n".join(pages)
 
 
 def extract_text_from_image(file_path: str) -> str:
-    import pytesseract
-    from PIL import Image
-    img = Image.open(file_path)
-    return pytesseract.image_to_string(img)
+    """Extract text from an image file using EasyOCR."""
+    from PIL import Image as PILImage
+    img = PILImage.open(file_path)
+    return _easyocr_image_to_text(img)
 
 
 def parse_script_text(raw_text: str) -> list[dict]:
