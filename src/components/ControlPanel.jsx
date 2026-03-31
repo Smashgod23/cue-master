@@ -168,31 +168,6 @@ export default function ControlPanel({ mode, onModeToggle, liveState, connected,
           </button>
         </div>
 
-        {/* Speed control */}
-        <div className="bg-parchment rounded-xl p-4 ring-1 ring-parchment-deep">
-          <div className="flex items-center justify-between mb-3">
-            <span className="font-sans text-xs font-medium text-ink-muted uppercase tracking-wider">
-              Cue Pacing
-            </span>
-            <span className="font-sans text-xs font-semibold text-gold-deep">
-              Natural
-            </span>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="4"
-            defaultValue="2"
-            className="w-full accent-gold h-1.5 rounded-full appearance-none bg-parchment-deep cursor-pointer
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold [&::-webkit-slider-thumb]:shadow-md
-              [&::-webkit-slider-thumb]:shadow-gold/30 [&::-webkit-slider-thumb]:cursor-pointer"
-          />
-          <div className="flex justify-between mt-1.5">
-            <span className="text-[10px] font-sans text-warmgray">Slow</span>
-            <span className="text-[10px] font-sans text-warmgray">Fast</span>
-          </div>
-        </div>
       </div>
 
       {/* Footer */}

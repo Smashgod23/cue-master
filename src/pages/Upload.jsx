@@ -29,6 +29,13 @@ export default function Upload() {
       return;
     }
 
+    // 50 MB limit
+    const MAX_BYTES = 50 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      setError("File is too large (max 50 MB). Try splitting the script into smaller sections.");
+      return;
+    }
+
     setError(null);
     setFileName(file.name);
     setUploading(true);
@@ -44,7 +51,9 @@ export default function Upload() {
         throw new Error(body.detail || `Upload failed (${res.status})`);
       }
 
-      // Store parsed script in sessionStorage so Setup page can reference it
+      // Clear any stale data from a previous upload before storing new script
+      sessionStorage.removeItem("parsedScript");
+      sessionStorage.removeItem("rehearsalSetup");
       const parsed = await res.json();
       sessionStorage.setItem("parsedScript", JSON.stringify(parsed));
       navigate("/setup");

@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { useState, useMemo, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import ScriptView from "./ScriptView";
 import ControlPanel from "./ControlPanel";
 import DirectorNotes from "./DirectorNotes";
@@ -41,9 +41,18 @@ function readSession(key) {
 }
 
 export default function RehearsalRoom() {
+  const navigate = useNavigate();
+
   // --- Derive script + setup from sessionStorage ---
   const parsedScript = useMemo(() => readSession("parsedScript"), []);
   const setup = useMemo(() => readSession("rehearsalSetup"), []);
+
+  // Redirect to upload if there's no script data (e.g. direct URL access)
+  useEffect(() => {
+    if (!parsedScript || parsedScript.length === 0) {
+      navigate("/upload", { replace: true });
+    }
+  }, [parsedScript, navigate]);
   const isUploaded = Boolean(parsedScript && parsedScript.length > 0);
 
   // Character the user is rehearsing as (ALL CAPS to match parsed script keys)

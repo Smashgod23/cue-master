@@ -29,6 +29,13 @@ export default function Setup() {
 
   const canSubmit = playName.trim() && characterName.trim() && !preparing;
 
+  // Warn if user typed a name that doesn't match any detected character
+  const charMismatch = characterName.trim().length > 0
+    && detectedChars.length > 0
+    && !detectedChars.some(
+        (c) => c.toLowerCase() === characterName.trim().toLowerCase()
+      );
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!canSubmit) return;
@@ -156,6 +163,11 @@ export default function Setup() {
                       Detected in your script: {detectedChars.join(", ")}
                     </p>
                   </>
+                )}
+                {charMismatch && (
+                  <p className="mt-1.5 font-sans text-[11px] text-gold-deep">
+                    This name wasn't found in your script. Double-check the spelling or pick from the detected list above.
+                  </p>
                 )}
               </div>
 

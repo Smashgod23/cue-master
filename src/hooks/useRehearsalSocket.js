@@ -126,7 +126,7 @@ export default function useRehearsalSocket() {
   // ------------------------------------------------------------------
   const connect = useCallback(
     (mode = "learning", character = "OBERON") => {
-      if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(`${protocol}//${window.location.host}/ws/rehearsal`);

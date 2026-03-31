@@ -145,71 +145,78 @@ STAGE_DIR_PATTERN = re.compile(
 )
 
 
-# Lazily loaded EasyOCR reader (shared across calls)
+# ---------------------------------------------------------------------------
+# OCR: EasyOCR with MPS (Apple Silicon GPU) acceleration
+# ---------------------------------------------------------------------------
+
 _easyocr_reader = None
 
 
 def _get_ocr_reader():
+    """Lazy-load EasyOCR once and reuse. Uses Apple Silicon MPS when available."""
     global _easyocr_reader
     if _easyocr_reader is None:
-        import easyocr
-        print("Loading EasyOCR (English)…")
-        # gpu=False keeps it portable; set True if you have CUDA
-        _easyocr_reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        import easyocr, torch
+        use_gpu = torch.backends.mps.is_available() or torch.cuda.is_available()
+        print(f"Loading EasyOCR (GPU={'MPS' if torch.backends.mps.is_available() else 'CUDA' if torch.cuda.is_available() else 'off'})…")
+        _easyocr_reader = easyocr.Reader(["en"], gpu=use_gpu, verbose=False)
         print("EasyOCR ready.")
     return _easyocr_reader
 
 
-def _easyocr_image_to_text(image) -> str:
+def _ocr_image_to_text(image) -> str:
     """
-    Run EasyOCR on a PIL Image and return a properly ordered string.
-    Boxes are sorted top-to-bottom, then left-to-right within each row,
-    so character cues that start a new line come out on their own line.
+    Run EasyOCR on a PIL Image with contrast/sharpness pre-processing and
+    return properly reading-ordered text.
+
+    Pre-processing significantly reduces errors on low-contrast scans.
+    Bounding boxes are grouped into rows by vertical midpoint (dynamic tolerance
+    derived from median box height) and sorted left-to-right within each row.
     """
-    import numpy as np
+    import numpy as np, statistics
+    from PIL import ImageEnhance
+
+    # Boost contrast and sharpness — helps a lot with old/faded scan layers
+    image = ImageEnhance.Contrast(image).enhance(1.5)
+    image = ImageEnhance.Sharpness(image).enhance(1.3)
+
     reader = _get_ocr_reader()
-    img_array = np.array(image)
-    results = reader.readtext(img_array, detail=1, paragraph=False)
+    results = reader.readtext(np.array(image), detail=1, paragraph=False)
 
     if not results:
         return ""
 
-    # Each result: (bbox, text, confidence) where bbox = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
-    # Estimate a row-height tolerance from the median box height
-    import statistics
-    box_heights = []
-    filtered = []
-    for bbox, text, conf in results:
-        if conf < 0.2:
-            continue
-        h = max(pt[1] for pt in bbox) - min(pt[1] for pt in bbox)
-        box_heights.append(h)
-        filtered.append((bbox, text))
-
+    # Each result: (bbox [[x,y]×4], text, confidence)
+    # Filter low-confidence detections
+    filtered = [
+        (bbox, text, conf) for bbox, text, conf in results
+        if conf >= 0.3 and text.strip()
+    ]
     if not filtered:
         return ""
 
-    # Use half the median box height as the row-grouping tolerance
-    row_tol = max(8, statistics.median(box_heights) * 0.6)
+    # Compute dynamic row-grouping tolerance from median box height
+    heights = [max(pt[1] for pt in bbox) - min(pt[1] for pt in bbox)
+               for bbox, _, _ in filtered]
+    row_tol = max(6, statistics.median(heights) * 0.55)
 
-    # Group into rows by vertical centre position
+    # Group bounding boxes into rows by vertical midpoint
     rows: list[list[tuple]] = []
-    for bbox, text in filtered:
+    for bbox, text, _ in filtered:
         top_y = min(pt[1] for pt in bbox)
         bot_y = max(pt[1] for pt in bbox)
         mid_y = (top_y + bot_y) / 2
         left_x = min(pt[0] for pt in bbox)
         placed = False
         for row in rows:
-            row_mid = row[0][0]
-            if abs(mid_y - row_mid) <= row_tol:
+            if abs(mid_y - row[0][0]) <= row_tol:
                 row.append((mid_y, left_x, text))
                 placed = True
                 break
         if not placed:
             rows.append([(mid_y, left_x, text)])
 
-    # Sort rows top-to-bottom, then tokens left-to-right within each row
+    # Sort rows top-to-bottom, tokens left-to-right within each row
     rows.sort(key=lambda r: r[0][0])
     lines = []
     for row in rows:
@@ -219,30 +226,62 @@ def _easyocr_image_to_text(image) -> str:
     return "\n".join(lines)
 
 
+def _text_quality_ok(text: str) -> bool:
+    """
+    Return False when the extracted text looks like a bad OCR layer.
+    Two complementary signals:
+    1. Vowel-less word ratio — classic 'c' for 'e' / 'l' for 'i' substitutions.
+       Normal English prose < 0.5%; bad scans routinely exceed 3%.
+    2. OCR bracket corruption — backslashes (\) and [^ sequences that arise when
+       the original [ ] were mis-read. These never appear in clean script text.
+    """
+    words = re.findall(r"[A-Za-z]{2,}", text)
+    if len(words) < 15:
+        return True   # not enough text to judge — trust it
+    vowels = set("aeiouAEIOU")
+    no_vowel = sum(1 for w in words if not any(c in vowels for c in w))
+    if (no_vowel / len(words)) >= 0.030:
+        return False
+    # Count backslash / caret bracket artifacts per 100 words
+    artifact_count = text.count("\\") + text.count("[^") + text.count("\\^")
+    if (artifact_count / len(words)) * 100 >= 2.0:
+        return False
+    return True
+
+
 def extract_text_from_pdf(file_path: str) -> str:
     """
-    Extract text from a PDF. For pages with embedded text, use pdfplumber directly
-    (fast, perfect quality). For scanned/image pages where pdfplumber returns nothing,
-    fall back to EasyOCR on the rendered page image.
+    Extract text from a PDF per page.
+    - Text-based pages: pdfplumber (instant, lossless).
+    - Scanned pages (no embedded text): PaddleOCR on rendered image.
+    - Pages with an embedded but corrupted OCR layer: detected via vowel-ratio
+      heuristic, then re-OCR'd with PaddleOCR for better accuracy.
     """
     import pdfplumber
-    from PIL import Image as PILImage
 
     pages = []
     with pdfplumber.open(file_path) as pdf:
         for page in pdf.pages:
-            text = page.extract_text()
-            if text and text.strip():
+            text = page.extract_text() or ""
+            if text.strip() and _text_quality_ok(text):
+                # Clean text layer — use it directly
                 pages.append(text)
             else:
-                # Scanned page — render to image and run EasyOCR
+                # Missing or corrupted text layer — render and re-OCR
+                reason = "no text" if not text.strip() else "bad OCR layer detected"
+                print(f"  Page {page.page_number}: {reason}, running EasyOCR…")
                 try:
-                    pil_img = page.to_image(resolution=200).original
-                    ocr_text = _easyocr_image_to_text(pil_img)
+                    pil_img = page.to_image(resolution=180).original
+                    ocr_text = _ocr_image_to_text(pil_img)
                     if ocr_text.strip():
                         pages.append(ocr_text)
+                    elif text.strip():
+                        # OCR got nothing — fall back to the imperfect embedded text
+                        pages.append(text)
                 except Exception as e:
-                    print(f"EasyOCR fallback failed for page: {e}")
+                    print(f"  EasyOCR failed (page {page.page_number}): {e}")
+                    if text.strip():
+                        pages.append(text)
     return "\n".join(pages)
 
 
@@ -250,7 +289,7 @@ def extract_text_from_image(file_path: str) -> str:
     """Extract text from an image file using EasyOCR."""
     from PIL import Image as PILImage
     img = PILImage.open(file_path)
-    return _easyocr_image_to_text(img)
+    return _ocr_image_to_text(img)
 
 
 def parse_script_text(raw_text: str) -> list[dict]:
@@ -372,6 +411,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
     current_character = None
     current_text_parts = []
     line_id = 1
+    first_dialogue_seen = False  # suppress preamble noise before first dialogue
 
     # Matches inline stage directions embedded in dialogue, including OCR-mangled brackets.
     # OCR commonly corrupts [ as \, l, or { and ] as l, ], or }
@@ -386,7 +426,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
     )
 
     def flush_dialogue():
-        nonlocal line_id, current_character, current_text_parts
+        nonlocal line_id, current_character, current_text_parts, first_dialogue_seen
         if current_character and current_text_parts:
             text = " ".join(current_text_parts).strip()
             # Strip inline stage directions so they don't pollute spoken text
@@ -403,6 +443,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
                     "text": text,
                 })
                 line_id += 1
+                first_dialogue_seen = True
         current_text_parts = []
 
     for line in lines:
@@ -423,7 +464,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if _section_header:
             flush_dialogue()
             rest = _section_header.group(2).strip()
-            if rest:
+            if rest and first_dialogue_seen:
                 result.append({
                     "id": line_id,
                     "type": "stage_direction",
@@ -436,7 +477,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if STAGE_DIR_PATTERN.match(stripped):
             flush_dialogue()
             direction_text = stripped.strip("[]() \t")
-            if direction_text:
+            if direction_text and first_dialogue_seen:
                 result.append({
                     "id": line_id,
                     "type": "stage_direction",
@@ -470,7 +511,9 @@ def parse_script_text(raw_text: str) -> list[dict]:
 
         if current_character:
             current_text_parts.append(stripped)
-        else:
+        elif first_dialogue_seen:
+            # Only emit stage directions after the first real dialogue line —
+            # everything before it is preamble (cast lists, copyright, synopsis).
             result.append({
                 "id": line_id,
                 "type": "stage_direction",
@@ -1052,10 +1095,11 @@ async def upload_script(file: UploadFile = File(...)):
             raise HTTPException(status_code=422, detail="Could not extract any text from the uploaded file.")
 
         parsed = parse_script_text(raw_text)
-        if not parsed:
+        dialogue_count = sum(1 for l in parsed if l.get("type") == "dialogue")
+        if not parsed or dialogue_count == 0:
             raise HTTPException(
                 status_code=422,
-                detail="No dialogue or stage directions found. Check that your script has character names in ALL CAPS.",
+                detail="No dialogue found. Make sure your script has character names in ALL CAPS followed by their lines.",
             )
 
         _parsed_script = parsed
@@ -1109,6 +1153,10 @@ def main():
     print(f"  WS:       ws://{args.host}:{args.port}/ws/rehearsal")
     print(f"  Health:   http://{args.host}:{args.port}/api/health")
     print()
+
+    # Pre-warm PaddleOCR in a background thread so the first upload isn't slow
+    import threading
+    threading.Thread(target=_get_ocr_reader, daemon=True).start()
 
     uvicorn.run(app, host=args.host, port=args.port)
 
