@@ -146,7 +146,7 @@ export default function Home() {
           </button>
           {!selectedMode && (
             <p className="font-sans text-xs text-warmgray">
-              No mode selected — will default to Learning Mode
+              No mode selected - defaults to Learning Mode
             </p>
           )}
         </div>
