@@ -35,15 +35,13 @@ import uvicorn
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-PIPER_BIN = os.path.join(PROJECT_ROOT, "tools", "piper", "piper")
-PIPER_VOICE = os.path.join(PROJECT_ROOT, "tools", "voices", "en_US-lessac-high.onnx")
 CHROMA_PATH = os.path.join(PROJECT_ROOT, "data", "chroma_db")
 
 app = FastAPI(title="Cue Master Backend", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -295,6 +293,20 @@ def extract_text_from_image(file_path: str) -> str:
 def parse_script_text(raw_text: str) -> list[dict]:
     from collections import Counter
 
+    # -----------------------------------------------------------------------
+    # 0. Locate where the actual play begins and drop everything before it.
+    #    Cast lists, properties pages, copyright notices, and stage charts
+    #    precede the play text. We anchor on the first SCENE: block or the
+    #    "BEFORE RISE OF CURTAIN" rubric that universally opens one-act plays.
+    # -----------------------------------------------------------------------
+    _play_start_re = re.compile(
+        r'(?:^|\n)[ \t]*(?:SCENE\s*:|BEFORE RISE OF CURTAIN)',
+        re.IGNORECASE,
+    )
+    _ps_match = _play_start_re.search(raw_text)
+    if _ps_match:
+        raw_text = raw_text[_ps_match.start():]
+
     false_positives = {
         "ACT", "SCENE", "ACT I", "ACT II", "ACT III", "ACT IV", "ACT V",
         "PROLOGUE", "EPILOGUE", "INTERMISSION",
@@ -378,6 +390,38 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if _is_structurally_valid(cand):
             potential_characters.add(cand)
 
+    # Merge OCR-garbled duplicate character names (runs after both discovery passes).
+    # Names like "CRANDMA" or "FIRST DEARER" are removed so the fuzzy fallback inside
+    # the line parser maps them to the correct canonical character at parse time.
+    _honorific_re = re.compile(r'^(MR|MRS|MS|DR|SR|JR)\.\s+')
+    def _safe_to_merge(cand: str, canonical: str) -> bool:
+        """Return False for distinct characters that happen to score highly —
+        e.g. MR. SOUTH vs MRS. SOUTH differ by honorific and are different people."""
+        m_cand = _honorific_re.match(cand)
+        m_canon = _honorific_re.match(canonical)
+        if m_cand and m_canon:
+            return m_cand.group(1) == m_canon.group(1)
+        return True
+
+    try:
+        from rapidfuzz import fuzz as _rfuzz
+        # Sort by frequency descending; second-pass names not in name_counter get 0
+        _char_list = sorted(potential_characters, key=lambda n: -name_counter.get(n, 0))
+        _ocr_remap: dict[str, str] = {}
+        for i, cand in enumerate(_char_list):
+            if cand in _ocr_remap:
+                continue
+            for canonical in _char_list[:i]:
+                if canonical in _ocr_remap:
+                    continue
+                if _rfuzz.ratio(cand, canonical) >= 82 and _safe_to_merge(cand, canonical):
+                    _ocr_remap[cand] = canonical
+                    break
+        for bad in _ocr_remap:
+            potential_characters.discard(bad)
+    except ImportError:
+        pass
+
     # Pre-process: insert newlines before known character names buried mid-paragraph.
     # pdfplumber collapses multi-column / complex layout into one long line, so
     # "...I hope? FIRST BEARER. Never broke yet. SECOND BEARER. Holds up..." never
@@ -418,10 +462,12 @@ def parse_script_text(raw_text: str) -> list[dict]:
     _inline_stage_re = re.compile(
         r'\[.*?\]'              # [standard stage direction]
         r'|\(.*?\)'             # (parenthetical direction)
-        r'|\{[^}]{0,80}\}'      # {OCR curly-bracket variant}
+        r'|\{[^}\]]{0,80}[\]}]' # {OCR curly-bracket variant} — closed by } or ]
         r'|\\[A-Z][^\\]{0,80}\\' # \They sit at the table\ (OCR-mangled brackets)
         r'|\\\^[^\\.]{0,80}\\'  # \^pleading\ OCR variant
-        r'|\[-[^\]]{0,60}\]',   # [-direction-] OCR variant
+        r'|\[-[^\]]{0,60}\]'    # [-direction-] OCR variant
+        r'|\^\^[^^]{0,60}\^'    # ^^pleading^ OCR variant
+        r'|\^[A-Z][^^]{0,60}\^',  # ^Direction^ OCR variant
         re.DOTALL,
     )
 
@@ -431,11 +477,16 @@ def parse_script_text(raw_text: str) -> list[dict]:
             text = " ".join(current_text_parts).strip()
             # Strip inline stage directions so they don't pollute spoken text
             text = _inline_stage_re.sub("", text)
+            # Strip stray unmatched closing brackets left by OCR artifacts
+            text = re.sub(r"^\s*[\]})]+\s*", "", text)
+            text = re.sub(r"\s*[\[{(]+\s*$", "", text)
             # Collapse extra whitespace left behind
             text = re.sub(r"\s{2,}", " ", text).strip()
-            # Drop trailing punctuation artifacts from stripped directions
+            # Drop leading punctuation artifacts from stripped directions
             text = re.sub(r"^[.,:;]+\s*", "", text)
-            if text:
+            # Discard junk lines (only punctuation/brackets, or fewer than 3 words
+            # that are all-caps stage-direction noise)
+            if text and len(text) >= 3 and not re.fullmatch(r'[\s\]\[)(}{.,!?;:\-]+', text):
                 result.append({
                     "id": line_id,
                     "type": "dialogue",
@@ -488,25 +539,67 @@ def parse_script_text(raw_text: str) -> list[dict]:
             continue
 
         char_inline = re.match(
-            # Allow optional inline stage direction between name and delimiter:
-            # "ANNOUNCER [pleading]. Any lady..." or "MR. SOUTH: Darling..."
-            r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*(?:\[[^\]]{0,60}\][ \t]*)?[:.][ \t]*(.*)",
+            # Allow optional inline stage direction between name and delimiter.
+            # Handles clean brackets [dir], OCR curly variant {dir}, and mixed {dir].
+            # Examples: "ANNOUNCER [pleading]. Text" / "ANNOUNCER {seriously]. Text"
+            r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*"
+            r"(?:[\[{][^\]}{]{0,80}[\]}\)][ \t]*)?"  # optional stage direction
+            r"[:.][ \t]*(.*)",
             stripped,
         )
         if char_inline:
             name = char_inline.group(1).strip()
             rest = char_inline.group(2).strip()
+            matched_char = None
             if name in potential_characters:
+                matched_char = name
+            else:
+                # Fuzzy fallback: accept if rapidfuzz finds a close match (≥85 score).
+                # Guard: reject prefix-only matches caused by regex backtracking.
+                # E.g. "MRS. SOUTH wears..." backtracks to name="MRS", which fuzzy-
+                # matches "MRS. SOUTH" at 90% via prefix. Detect this by checking
+                # whether the rest starts with the "missing" tail of the matched char.
+                try:
+                    from rapidfuzz import process as rf_process
+                    best = rf_process.extractOne(
+                        name, potential_characters, score_cutoff=85
+                    )
+                    if best:
+                        candidate = best[0]
+                        # Reject if name is a clean prefix of candidate and rest
+                        # immediately continues with the missing suffix.
+                        tail = candidate[len(name):].lstrip(". ").upper()
+                        if tail and rest.upper().startswith(tail):
+                            pass  # backtracking false positive — skip
+                        else:
+                            matched_char = candidate
+                except ImportError:
+                    pass
+            if matched_char:
                 flush_dialogue()
-                current_character = name
+                current_character = matched_char
                 if rest:
                     current_text_parts.append(rest)
                 continue
 
         upper_stripped = stripped.rstrip(":.")
+        standalone_char = None
         if upper_stripped in potential_characters:
+            standalone_char = upper_stripped
+        elif len(upper_stripped) >= 2 and upper_stripped == upper_stripped.upper():
+            # Fuzzy fallback for standalone OCR-garbled character-name-only lines
+            try:
+                from rapidfuzz import process as rf_process
+                best = rf_process.extractOne(
+                    upper_stripped, potential_characters, score_cutoff=85
+                )
+                if best:
+                    standalone_char = best[0]
+            except ImportError:
+                pass
+        if standalone_char:
             flush_dialogue()
-            current_character = upper_stripped
+            current_character = standalone_char
             continue
 
         if current_character:
@@ -724,19 +817,33 @@ def _raw_pcm_to_wav(pcm: bytes, sample_rate: int, channels: int, bits: int) -> b
 
 def _tts(text: str) -> bytes:
     """
-    Synthesize text with piper and return WAV bytes.
+    Synthesize text using macOS built-in TTS (say + afconvert) and return WAV bytes.
     Intended to run in a thread executor.
     """
-    proc = subprocess.run(
-        [PIPER_BIN, "--model", PIPER_VOICE, "--output-raw"],
-        input=text.encode("utf-8"),
-        capture_output=True,
-        timeout=30,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"Piper failed: {proc.stderr.decode()[:200]}")
-    # lessac-high outputs 22050 Hz mono 16-bit PCM
-    return _raw_pcm_to_wav(proc.stdout, sample_rate=22050, channels=1, bits=16)
+    aiff_path = None
+    wav_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as f:
+            aiff_path = f.name
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            wav_path = f.name
+        subprocess.run(
+            ["say", "-v", "Alex", text, "-o", aiff_path],
+            check=True, capture_output=True, timeout=30,
+        )
+        subprocess.run(
+            ["afconvert", "-f", "WAVE", "-d", "LEI16", aiff_path, wav_path],
+            check=True, capture_output=True, timeout=10,
+        )
+        with open(wav_path, "rb") as f:
+            return f.read()
+    finally:
+        for p in [aiff_path, wav_path]:
+            if p:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
 
 # ---------------------------------------------------------------------------

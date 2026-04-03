@@ -36,6 +36,15 @@ export default function Setup() {
         (c) => c.toLowerCase() === characterName.trim().toLowerCase()
       );
 
+  const saveAndGo = () => {
+    sessionStorage.setItem("rehearsalSetup", JSON.stringify({
+      play: playName.trim(),
+      character: characterName.trim(),
+      notes: notes.trim(),
+    }));
+    navigate("/rehearse");
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!canSubmit) return;
@@ -59,14 +68,7 @@ export default function Setup() {
         throw new Error(body.detail || `Research failed (${res.status})`);
       }
 
-      // Store setup info for the rehearsal page
-      sessionStorage.setItem("rehearsalSetup", JSON.stringify({
-        play: playName.trim(),
-        character: characterName.trim(),
-        notes: notes.trim(),
-      }));
-
-      navigate("/rehearse");
+      saveAndGo();
     } catch (err) {
       setError(err.message);
       setPreparing(false);
@@ -192,8 +194,16 @@ export default function Setup() {
 
             {/* Error */}
             {error && (
-              <div className="mt-4 p-4 rounded-xl bg-crimson/5 border border-crimson/20 text-center animate-fade-in-up">
-                <p className="font-body text-sm text-crimson">{error}</p>
+              <div className="mt-4 p-4 rounded-xl bg-crimson/5 border border-crimson/20 animate-fade-in-up">
+                <p className="font-body text-sm text-crimson text-center">{error}</p>
+                <button
+                  type="button"
+                  onClick={saveAndGo}
+                  className="mt-3 w-full py-2.5 rounded-lg bg-parchment-deep text-ink-muted text-xs font-sans font-medium
+                    hover:bg-parchment-deep/80 transition-colors cursor-pointer"
+                >
+                  Skip research and start without play context
+                </button>
               </div>
             )}
 
@@ -215,14 +225,23 @@ export default function Setup() {
               Prepare My Director
             </button>
 
-            {/* Back */}
-            <div className="mt-6 text-center">
+            {/* Back / Skip */}
+            <div className="mt-6 flex items-center justify-between">
               <Link
                 to="/upload"
                 className="font-sans text-xs text-warmgray hover:text-ink-soft transition-colors no-underline"
               >
                 &larr; Back to upload
               </Link>
+              {canSubmit && (
+                <button
+                  type="button"
+                  onClick={saveAndGo}
+                  className="font-sans text-xs text-warmgray hover:text-ink-soft transition-colors cursor-pointer"
+                >
+                  Skip research &rarr;
+                </button>
+              )}
             </div>
           </form>
         )}
