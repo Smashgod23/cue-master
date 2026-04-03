@@ -319,6 +319,9 @@ def parse_script_text(raw_text: str) -> list[dict]:
         "PRINTED IN USA", "DRAMATIC PUBLISHING", "CURTAIN LINE",
         # Honorific abbreviations that appear mid-text (not standalone character names)
         "MR", "MRS", "MS", "DR", "SR", "JR",
+        # OCR artifacts / common words that look like character names
+        "AND", "AND MRS", "AND MR", "THE", "FOR", "MB", "MR", "OF",
+        "YES", "NO", "OH", "AH", "HA", "OK", "OKAY",
     }
 
     name_counter: Counter = Counter()
