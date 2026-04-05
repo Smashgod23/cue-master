@@ -118,14 +118,12 @@ export default function Home() {
               <h3 className="font-serif text-lg font-bold text-ink">The AI Director</h3>
             </div>
             <p className="font-body text-sm text-ink-soft leading-relaxed">
-              Before your rehearsal starts, the director researches your play and character
-              online, building a knowledge base of historical context, acting analysis, and
-              character motivations. During the scene, it listens to three things: your
-              <strong className="text-ink"> pacing</strong> (words per minute),
-              <strong className="text-ink"> volume</strong> (how loudly or softly you speak), and
-              <strong className="text-ink"> accuracy</strong> (how closely you match the text).
-              It combines that data with dramaturgical context to give you feedback
-              that's specific to your scene, not generic acting advice.
+              Before your rehearsal starts, the director looks up your play and character
+              online and builds a reference on the role - who they are, what they want, how
+              other actors have played them. During the scene it tracks your pacing (words
+              per minute), volume, and how closely you match the text. That data plus the
+              character research is what shapes the notes, so the feedback is about your
+              scene, not generic acting advice.
             </p>
           </div>
         </div>
