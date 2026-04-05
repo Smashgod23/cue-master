@@ -434,9 +434,11 @@ def parse_script_text(raw_text: str) -> list[dict]:
         escaped = [re.escape(c) for c in sorted_chars]
         # Match a character name that:
         #   - is preceded by sentence-ending punctuation + whitespace (mid-paragraph)
-        #   - is followed by optional whitespace then [.:]  OR  a stage-direction bracket
+        #   - is followed by [.:] AND then actual dialogue text (space + non-whitespace)
+        # The text requirement prevents false splits on vocatives like "ready? NURSE."
+        # at end of a clause where NURSE is being addressed, not speaking.
         mid_char_re = re.compile(
-            r'(?<=[.?!])\s+(' + "|".join(escaped) + r')(?=\s*[.:[\(])'
+            r'(?<=[.?!])\s+(' + "|".join(escaped) + r')(?=\s*[:.][ \t]+\S)'
         )
         raw_text = mid_char_re.sub(r"\n\1", raw_text)
 
@@ -1193,18 +1195,19 @@ async def upload_script(file: UploadFile = File(...)):
         tmp.write(content)
         tmp_path = tmp.name
 
+    loop = asyncio.get_running_loop()
     try:
         if ext == "pdf":
-            raw_text = extract_text_from_pdf(tmp_path)
+            raw_text = await loop.run_in_executor(_executor, extract_text_from_pdf, tmp_path)
         elif ext in ("png", "jpg", "jpeg"):
-            raw_text = extract_text_from_image(tmp_path)
+            raw_text = await loop.run_in_executor(_executor, extract_text_from_image, tmp_path)
         else:
             raw_text = content.decode("utf-8", errors="replace")
 
         if not raw_text or not raw_text.strip():
             raise HTTPException(status_code=422, detail="Could not extract any text from the uploaded file.")
 
-        parsed = parse_script_text(raw_text)
+        parsed = await loop.run_in_executor(_executor, parse_script_text, raw_text)
         dialogue_count = sum(1 for l in parsed if l.get("type") == "dialogue")
         if not parsed or dialogue_count == 0:
             raise HTTPException(

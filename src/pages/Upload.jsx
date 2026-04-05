@@ -44,7 +44,15 @@ export default function Upload() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      // 5-minute timeout — large scanned PDFs can take a while with OCR
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+      let res;
+      try {
+        res = await fetch("/api/upload", { method: "POST", body: formData, signal: controller.signal });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -56,9 +64,13 @@ export default function Upload() {
       sessionStorage.removeItem("rehearsalSetup");
       const parsed = await res.json();
       sessionStorage.setItem("parsedScript", JSON.stringify(parsed));
-      navigate("/setup");
+      navigate("/review");
     } catch (err) {
-      setError(err.message);
+      if (err.name === "AbortError") {
+        setError("Upload timed out. The file may be too large or complex to parse. Try a smaller file or a plain text version.");
+      } else {
+        setError(err.message);
+      }
       setUploading(false);
     }
   }, [navigate]);

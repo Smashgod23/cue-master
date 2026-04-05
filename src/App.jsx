@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
 import Upload from "./pages/Upload";
+import ScriptReview from "./pages/ScriptReview";
 import Setup from "./pages/Setup";
 import RehearsalRoom from "./components/RehearsalRoom";
 
@@ -9,6 +10,7 @@ function App() {
     <Routes>
       <Route path="/" element={<Home />} />
       <Route path="/upload" element={<Upload />} />
+      <Route path="/review" element={<ScriptReview />} />
       <Route path="/setup" element={<Setup />} />
       <Route path="/rehearse" element={<RehearsalRoom />} />
     </Routes>
