@@ -625,6 +625,127 @@ def parse_script_text(raw_text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# OCR autocorrect
+# ---------------------------------------------------------------------------
+
+def autocorrect_script(lines: list[dict]) -> list[dict]:
+    """
+    Run a conservative spell-check pass on dialogue text.
+
+    Strategy:
+    - Build a protected-word set from all character names + any word that
+      appears 2+ times in the script (repeated words are almost certainly
+      intentional, including unusual proper nouns like "Oberon").
+    - For each remaining flagged word, accept the spell-checker's top
+      correction only when edit-distance == 1 (single-character fix).
+      This catches OCR transpositions ("teh"->"the") while avoiding
+      aggressive rewrites of unusual but correct vocabulary.
+    - All-caps tokens and tokens with digits are always skipped.
+    - Corrections are stored in line["_corrections"] as a list of
+      {original, corrected} dicts so the frontend can show diffs and
+      allow per-word reverts.
+    """
+    try:
+        from spellchecker import SpellChecker
+    except ImportError:
+        # pyspellchecker not installed — return lines unchanged
+        return lines
+
+    # --- build protected word set ---
+    from collections import Counter as _Counter
+
+    char_names: set[str] = set()
+    word_freq: _Counter = _Counter()
+
+    for line in lines:
+        if line.get("character"):
+            # Protect every token of the character name
+            for tok in line["character"].split():
+                char_names.add(tok.lower())
+        if line.get("type") == "dialogue" and line.get("text"):
+            for tok in re.findall(r"[a-zA-Z']+", line["text"]):
+                word_freq[tok.lower()] += 1
+
+    # Words appearing 2+ times are treated as known/intentional
+    frequent_words = {w for w, c in word_freq.items() if c >= 2}
+    protected = char_names | frequent_words
+
+    spell = SpellChecker()
+    spell.word_frequency.load_words(protected)
+
+    def _edit_distance(a: str, b: str) -> int:
+        """Simple edit distance (no full DP needed — we only care if it's 1)."""
+        if abs(len(a) - len(b)) > 1:
+            return 2
+        if a == b:
+            return 0
+        # Substitution / transposition check for same-length strings
+        if len(a) == len(b):
+            diffs = sum(x != y for x, y in zip(a, b))
+            return 1 if diffs == 1 else 2
+        # Insertion / deletion
+        longer, shorter = (a, b) if len(a) > len(b) else (b, a)
+        for i in range(len(longer)):
+            if longer[:i] + longer[i+1:] == shorter:
+                return 1
+        return 2
+
+    corrected_lines = []
+    for line in lines:
+        if line.get("type") != "dialogue" or not line.get("text"):
+            corrected_lines.append(line)
+            continue
+
+        text = line["text"]
+        corrections: list[dict] = []
+
+        # Tokenise while preserving positions so we can do in-place replacement
+        # Match word tokens; non-word characters are passed through unchanged.
+        parts = re.split(r"(\b[a-zA-Z']+\b)", text)
+        new_parts = []
+        for part in parts:
+            # Skip non-word segments, all-caps tokens, short tokens, protected words
+            if not re.fullmatch(r"[a-zA-Z']+", part):
+                new_parts.append(part)
+                continue
+            if part.isupper() or len(part) <= 2 or part.lower() in protected:
+                new_parts.append(part)
+                continue
+
+            misspelled = spell.unknown([part])
+            if not misspelled:
+                new_parts.append(part)
+                continue
+
+            candidate = spell.correction(part)
+            if candidate is None or candidate == part.lower():
+                new_parts.append(part)
+                continue
+
+            # Only accept single-edit-distance corrections
+            if _edit_distance(part.lower(), candidate) != 1:
+                new_parts.append(part)
+                continue
+
+            # Preserve original capitalisation pattern
+            if part[0].isupper():
+                candidate = candidate[0].upper() + candidate[1:]
+
+            corrections.append({"original": part, "corrected": candidate})
+            new_parts.append(candidate)
+
+        if corrections:
+            new_line = dict(line)
+            new_line["text"] = "".join(new_parts)
+            new_line["_corrections"] = corrections
+            corrected_lines.append(new_line)
+        else:
+            corrected_lines.append(line)
+
+    return corrected_lines
+
+
+# ---------------------------------------------------------------------------
 # Step 4: RAG helpers
 # ---------------------------------------------------------------------------
 
@@ -1214,6 +1335,8 @@ async def upload_script(file: UploadFile = File(...)):
                 status_code=422,
                 detail="No dialogue found. Make sure your script has character names in ALL CAPS followed by their lines.",
             )
+
+        parsed = await loop.run_in_executor(_executor, autocorrect_script, parsed)
 
         _parsed_script = parsed
         return parsed
