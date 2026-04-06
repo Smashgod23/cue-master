@@ -131,8 +131,11 @@ def _get_chroma():
 # Script parsing helpers
 # ---------------------------------------------------------------------------
 
+# Matches a standalone character-cue line (nothing else on the line).
+# Accepts both ALL CAPS (classic play format) and Title Case / mixed case
+# (modern scripts, transcripts). Word-count is enforced in the loop (≤ 4 words).
 CHARACTER_PATTERN = re.compile(
-    r"^[ \t]*([A-Z][A-Z .'-]{1,30}[A-Z])[ \t]*[:.]?[ \t]*$",
+    r"^[ \t]*([A-Z][A-Za-z .'-]{1,30}[A-Za-z])[ \t]*[:.]?[ \t]*$",
     re.MULTILINE,
 )
 STAGE_DIR_PATTERN = re.compile(
@@ -328,17 +331,22 @@ def parse_script_text(raw_text: str) -> list[dict]:
 
     for match in CHARACTER_PATTERN.finditer(raw_text):
         name = match.group(1).strip().rstrip(":.")
-        if len(name) >= 2:
-            name_counter[name] += 1
+        # Normalize to ALL CAPS so downstream code stays case-agnostic.
+        # Word-count guard prevents long sentences that happen to stand alone
+        # from being counted (e.g. a short stage direction on its own line).
+        if len(name) >= 2 and len(name.split()) <= 4:
+            name_counter[name.upper()] += 1
 
+    # Inline "Name: dialogue" pattern — relaxed to Title Case / mixed case so
+    # scripts that don't use ALL CAPS are still detected correctly.
     inline_pattern = re.compile(
-        r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*[:.][ \t]+\S",
+        r"^[ \t]*([A-Z][A-Za-z .'-]{0,30}[A-Za-z])[ \t]*[:.][ \t]+\S",
         re.MULTILINE,
     )
     for match in inline_pattern.finditer(raw_text):
         name = match.group(1).strip()
-        if len(name) >= 2:
-            name_counter[name] += 1
+        if len(name) >= 2 and len(name.split()) <= 4:
+            name_counter[name.upper()] += 1
 
     _structural_kw = {"COPYRIGHT", "PUBLISHING", "DRAMATIC", "CURTAIN LINE",
                       "ALL RIGHTS", "STAGE POSITION", "PRINTED"}
@@ -546,40 +554,50 @@ def parse_script_text(raw_text: str) -> list[dict]:
         char_inline = re.match(
             # Allow optional inline stage direction between name and delimiter.
             # Handles clean brackets [dir], OCR curly variant {dir}, and mixed {dir].
-            # Examples: "ANNOUNCER [pleading]. Text" / "ANNOUNCER {seriously]. Text"
-            r"^[ \t]*([A-Z][A-Z .'-]{0,30}[A-Z])[ \t]*"
+            # Examples: "ANNOUNCER [pleading]. Text" / "John {aside]. Text"
+            # Mixed case accepted here; name is normalised to ALL CAPS for lookup.
+            r"^[ \t]*([A-Z][A-Za-z .'-]{0,30}[A-Za-z])[ \t]*"
             r"(?:[\[{][^\]}{]{0,80}[\]}\)][ \t]*)?"  # optional stage direction
             r"[:.][ \t]*(.*)",
             stripped,
         )
         if char_inline:
             name = char_inline.group(1).strip()
-            rest = char_inline.group(2).strip()
-            matched_char = None
-            if name in potential_characters:
-                matched_char = name
+            # Normalise to ALL CAPS — potential_characters stores names in ALL CAPS
+            name_upper = name.upper()
+            # Skip if too many words (sentences starting with a capital would match)
+            if len(name.split()) <= 4:
+                rest = char_inline.group(2).strip()
+                matched_char = None
+                if name_upper in potential_characters:
+                    matched_char = name_upper
+                elif name in potential_characters:
+                    matched_char = name
+                else:
+                    # Fuzzy fallback: accept if rapidfuzz finds a close match (≥85 score).
+                    # Guard: reject prefix-only matches caused by regex backtracking.
+                    # E.g. "MRS. SOUTH wears..." backtracks to name="MRS", which fuzzy-
+                    # matches "MRS. SOUTH" at 90% via prefix. Detect this by checking
+                    # whether the rest starts with the "missing" tail of the matched char.
+                    try:
+                        from rapidfuzz import process as rf_process
+                        best = rf_process.extractOne(
+                            name_upper, potential_characters, score_cutoff=85
+                        )
+                        if best:
+                            candidate = best[0]
+                            # Reject if name is a clean prefix of candidate and rest
+                            # immediately continues with the missing suffix.
+                            tail = candidate[len(name_upper):].lstrip(". ").upper()
+                            if tail and rest.upper().startswith(tail):
+                                pass  # backtracking false positive — skip
+                            else:
+                                matched_char = candidate
+                    except ImportError:
+                        pass
             else:
-                # Fuzzy fallback: accept if rapidfuzz finds a close match (≥85 score).
-                # Guard: reject prefix-only matches caused by regex backtracking.
-                # E.g. "MRS. SOUTH wears..." backtracks to name="MRS", which fuzzy-
-                # matches "MRS. SOUTH" at 90% via prefix. Detect this by checking
-                # whether the rest starts with the "missing" tail of the matched char.
-                try:
-                    from rapidfuzz import process as rf_process
-                    best = rf_process.extractOne(
-                        name, potential_characters, score_cutoff=85
-                    )
-                    if best:
-                        candidate = best[0]
-                        # Reject if name is a clean prefix of candidate and rest
-                        # immediately continues with the missing suffix.
-                        tail = candidate[len(name):].lstrip(". ").upper()
-                        if tail and rest.upper().startswith(tail):
-                            pass  # backtracking false positive — skip
-                        else:
-                            matched_char = candidate
-                except ImportError:
-                    pass
+                matched_char = None
+                rest = ""
             if matched_char:
                 flush_dialogue()
                 current_character = matched_char
@@ -591,8 +609,11 @@ def parse_script_text(raw_text: str) -> list[dict]:
         standalone_char = None
         if upper_stripped in potential_characters:
             standalone_char = upper_stripped
+        elif upper_stripped.upper() in potential_characters and len(upper_stripped.split()) <= 4:
+            # Mixed-case script: "Oberon" normalises to "OBERON" which is in potential_characters
+            standalone_char = upper_stripped.upper()
         elif len(upper_stripped) >= 2 and upper_stripped == upper_stripped.upper():
-            # Fuzzy fallback for standalone OCR-garbled character-name-only lines
+            # Fuzzy fallback for standalone OCR-garbled ALL CAPS character-name-only lines
             try:
                 from rapidfuzz import process as rf_process
                 best = rf_process.extractOne(
@@ -1333,7 +1354,7 @@ async def upload_script(file: UploadFile = File(...)):
         if not parsed or dialogue_count == 0:
             raise HTTPException(
                 status_code=422,
-                detail="No dialogue found. Make sure your script has character names in ALL CAPS followed by their lines.",
+                detail="No dialogue found. Make sure character names appear on their own line or are followed by a colon (e.g. 'JOHN: Hello' or 'John: Hello').",
             )
 
         parsed = await loop.run_in_executor(_executor, autocorrect_script, parsed)

@@ -45,7 +45,8 @@ export default function ScriptView({ lines, meta, userCharKey, charMap, activeLi
         <h3 className="font-serif text-xl font-bold text-ink">Script could not be parsed</h3>
         <p className="font-body text-sm text-ink-soft mt-3 max-w-sm leading-relaxed">
           No dialogue or stage directions were found. Make sure character names appear
-          in ALL CAPS followed by a colon, or try uploading a different file format.
+          on their own line or followed by a colon (e.g. "JOHN: Hello" or "John: Hello"),
+          or try uploading a different file format.
         </p>
       </div>
     );

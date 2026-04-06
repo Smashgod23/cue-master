@@ -11,8 +11,11 @@ function getScriptCharacters() {
     lines.forEach((l) => {
       if (l.type === "dialogue" && l.character) seen.add(l.character);
     });
-    // Title-case for display (e.g. "OBERON" -> "Oberon")
-    return [...seen].map((c) => c.charAt(0) + c.slice(1).toLowerCase());
+    // Convert ALL CAPS names to Title Case for display (e.g. "OBERON" -> "Oberon").
+    // Mixed-case names (e.g. "John", "Mrs. Brown") are left as-is.
+    return [...seen].map((c) =>
+      c === c.toUpperCase() ? c.charAt(0) + c.slice(1).toLowerCase() : c
+    );
   } catch {
     return [];
   }
