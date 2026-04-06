@@ -146,6 +146,72 @@ STAGE_DIR_PATTERN = re.compile(
 )
 
 
+def _extract_cast_names(full_text: str) -> set[str]:
+    """
+    Extract character names from a CHARACTERS / CAST section if present.
+    Runs on the FULL raw text (before play-start truncation) so the cast
+    list is available even though it appears before the play body.
+    """
+    cast_match = re.search(
+        r'(?:^|\n)\s*(?:CHARACTERS|CAST(?:\s+OF\s+CHARACTERS)?)\s*\n',
+        full_text, re.IGNORECASE,
+    )
+    if not cast_match:
+        return set()
+
+    rest = full_text[cast_match.end():]
+    end_match = re.search(
+        r'\n\s*(?:PLACE|TIME|SCENE|SETTING|PROPERTIES|STAGE|ACT|NOTICE|COPYRIGHT)\b',
+        rest, re.IGNORECASE,
+    )
+    if end_match:
+        rest = rest[:end_match.start()]
+
+    names: set[str] = set()
+    for line in rest.split('\n'):
+        line = line.strip()
+        if not line or line.startswith('.') or line.startswith('(') or line.startswith('*'):
+            continue
+
+        # Multi-character line: "A Nurse, two Stretcher Bearers and a Young Girl."
+        if re.match(r'^[Aa]\s+', line) and (',' in line or ' and ' in line.lower()):
+            parts = re.split(r'[,]\s*(?:and\s+)?|\s+and\s+', line, flags=re.IGNORECASE)
+            for part in parts:
+                part = part.strip().rstrip('.')
+                part = re.sub(r'^(?:A|An|Two|Three|Four|Five)\s+', '', part, flags=re.IGNORECASE)
+                m = re.match(r'^([A-Z][A-Za-z.\']+(?:\s+[A-Z][A-Za-z.\']*)*)', part)
+                if m:
+                    n = m.group(1).strip().rstrip('.')
+                    if len(n) >= 3:
+                        names.add(n.upper())
+            continue
+
+        # Standard line: leading capitalized words are the name, rest is description
+        m = re.match(r'^([A-Z][A-Za-z.\']+(?:\s+[A-Z][A-Za-z.\']*)*)', line)
+        if m:
+            n = m.group(1).strip().rstrip('.')
+            if len(n) >= 2:
+                names.add(n.upper())
+
+    return names
+
+
+def _rejoin_broken_words(raw_text: str) -> str:
+    """
+    Rejoin words that were split across PDF lines by explicit hyphenation.
+    Only handles the safe case: word fragment ending with a hyphen + newline +
+    lowercase continuation (e.g. "Feather-\\nstone" -> "Featherstone").
+    Implicit breaks (no hyphen) are handled later by the autocorrect fragment
+    rejoiner, which has access to the spell checker for validation.
+    """
+    raw_text = re.sub(
+        r'([a-zA-Z]{2,})-\s*\n\s*([a-z]{2,})',
+        r'\1\2',
+        raw_text,
+    )
+    return raw_text
+
+
 # ---------------------------------------------------------------------------
 # OCR: EasyOCR with MPS (Apple Silicon GPU) acceleration
 # ---------------------------------------------------------------------------
@@ -297,10 +363,13 @@ def parse_script_text(raw_text: str) -> list[dict]:
     from collections import Counter
 
     # -----------------------------------------------------------------------
-    # 0. Locate where the actual play begins and drop everything before it.
-    #    Cast lists, properties pages, copyright notices, and stage charts
-    #    precede the play text. We anchor on the first SCENE: block or the
-    #    "BEFORE RISE OF CURTAIN" rubric that universally opens one-act plays.
+    # 0a. Extract cast names from CHARACTERS section (before truncation)
+    # -----------------------------------------------------------------------
+    full_text = raw_text  # keep reference for title detection later
+    cast_names = _extract_cast_names(raw_text)
+
+    # -----------------------------------------------------------------------
+    # 0b. Locate where the actual play begins and drop everything before it.
     # -----------------------------------------------------------------------
     _play_start_re = re.compile(
         r'(?:^|\n)[ \t]*(?:SCENE\s*:|BEFORE RISE OF CURTAIN)',
@@ -309,6 +378,11 @@ def parse_script_text(raw_text: str) -> list[dict]:
     _ps_match = _play_start_re.search(raw_text)
     if _ps_match:
         raw_text = raw_text[_ps_match.start():]
+
+    # -----------------------------------------------------------------------
+    # 0c. Rejoin words broken across PDF lines by hyphenation
+    # -----------------------------------------------------------------------
+    raw_text = _rejoin_broken_words(raw_text)
 
     false_positives = {
         "ACT", "SCENE", "ACT I", "ACT II", "ACT III", "ACT IV", "ACT V",
@@ -325,20 +399,21 @@ def parse_script_text(raw_text: str) -> list[dict]:
         # OCR artifacts / common words that look like character names
         "AND", "AND MRS", "AND MR", "THE", "FOR", "MB", "MR", "OF",
         "YES", "NO", "OH", "AH", "HA", "OK", "OKAY",
+        # Short pronouns/words that OCR or regex can mistake for character names
+        "ME", "WE", "HE", "SHE", "BE", "IF", "SO", "UP", "DO", "AM",
+        "AN", "AS", "AT", "BY", "GO", "IN", "IS", "IT", "MY", "ON",
+        "OR", "TO", "US", "HIS", "HER", "OUR", "BUT", "NOT", "NOR",
+        "ALL", "ANY", "FEW", "OLD", "NEW", "NOW", "HOW", "WHO", "WHY",
+        "MR S", "MR. S", "MRS S",
     }
 
     name_counter: Counter = Counter()
 
     for match in CHARACTER_PATTERN.finditer(raw_text):
         name = match.group(1).strip().rstrip(":.")
-        # Normalize to ALL CAPS so downstream code stays case-agnostic.
-        # Word-count guard prevents long sentences that happen to stand alone
-        # from being counted (e.g. a short stage direction on its own line).
         if len(name) >= 2 and len(name.split()) <= 4:
             name_counter[name.upper()] += 1
 
-    # Inline "Name: dialogue" pattern — relaxed to Title Case / mixed case so
-    # scripts that don't use ALL CAPS are still detected correctly.
     inline_pattern = re.compile(
         r"^[ \t]*([A-Z][A-Za-z .'-]{0,30}[A-Za-z])[ \t]*[:.][ \t]+\S",
         re.MULTILINE,
@@ -359,7 +434,6 @@ def parse_script_text(raw_text: str) -> list[dict]:
             return False
         if any(kw in name for kw in _structural_kw):
             return False
-        # Require ≥3 appearances for long names; ≥2 for short names (one-off characters)
         min_count = 2 if len(words) <= 2 else 3
         return count >= min_count
 
@@ -368,12 +442,57 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if _is_valid_char_name(name, count)
     }
 
+    # -----------------------------------------------------------------------
+    # Integrate cast list names: add them only if they appear at the start of
+    # a line followed by a delimiter (character-cue format). This prevents
+    # adding collective/descriptive names (e.g. "STRETCHER BEARERS") that
+    # only appear in stage directions.
+    # -----------------------------------------------------------------------
+    for cn in cast_names:
+        if cn in false_positives or any(kw in cn for kw in _structural_kw):
+            continue
+        if len(cn.split()) > 4:
+            continue
+        # Already known from frequency counting — keep it
+        if cn in potential_characters:
+            continue
+        # Check if the name appears at start of line with a delimiter or
+        # stage direction after it (character-cue format)
+        _cue_re = re.compile(
+            r'(?:^|\n)\s*' + re.escape(cn) + r'\s*[:.;,\[\{(\\]',
+            re.IGNORECASE,
+        )
+        if _cue_re.search(raw_text):
+            potential_characters.add(cn)
+
+    # -----------------------------------------------------------------------
+    # Accept ALL-CAPS names from inline_pattern even with count=1 when they
+    # have a strong character-cue format (NAME. or NAME: followed by dialogue).
+    # This catches one-off characters like FIRST BEARER, SECOND BEARER.
+    # Guards: name must be ≥ 6 chars, no periods, ≤ 2 words, not in
+    # false_positives, and not a fuzzy match of an existing character.
+    # -----------------------------------------------------------------------
+    try:
+        from rapidfuzz import fuzz as _add_fuzz
+        _existing_chars = list(potential_characters)
+    except ImportError:
+        _add_fuzz = None
+        _existing_chars = []
+
+    for name, count in name_counter.items():
+        if count >= 1 and name == name.upper() and len(name.split()) <= 2:
+            if name not in false_positives and not any(kw in name for kw in _structural_kw):
+                if len(name) >= 6 and not re.search(r'[.]', name):
+                    # Skip if this fuzzy-matches an existing character (OCR garbling)
+                    if _add_fuzz and any(
+                        _add_fuzz.ratio(name, ec) >= 65 for ec in _existing_chars
+                    ):
+                        continue
+                    potential_characters.add(name)
+
     # Second-pass discovery: find ALL-CAPS sequences mid-paragraph that look like
-    # character cues (NAME. or NAME: followed immediately by dialogue text) but were
-    # missed because they appear only once (e.g. FIRST BEARER, SECOND BEARER).
-    # We add them to potential_characters so the mid-text splitter catches them.
+    # character cues but were missed because they appear only once.
     def _is_structurally_valid(name: str) -> bool:
-        """Check only the structural rules (no frequency requirement)."""
         words = name.split()
         if len(words) > 2:
             return False
@@ -381,8 +500,6 @@ def parse_script_text(raw_text: str) -> list[dict]:
             return False
         return not any(kw in name for kw in _structural_kw)
 
-    # Names that are a trailing word of an already-known multi-word character should
-    # not be added as a separate character (e.g. "SOUTH" from "MR. SOUTH").
     _name_suffixes = {
         part
         for name in list(potential_characters)
@@ -391,23 +508,28 @@ def parse_script_text(raw_text: str) -> list[dict]:
     }
 
     _mid_discovery_re = re.compile(
-        r'(?<=[.?!])\s+([A-Z][A-Z]{1,}(?:\s+[A-Z]{2,})?)\s*[.:](?=\s+[A-Z])'
+        r'(?<=[.?!;:])\s+([A-Z][A-Z]{1,}(?:\s+[A-Z]{2,})?)\s*[.:](?=\s+[A-Z])'
     )
     for m in _mid_discovery_re.finditer(raw_text):
         cand = m.group(1).strip()
-        # Skip if this is just a component word of an existing multi-word character
         if cand in _name_suffixes:
             continue
+        # Skip if this fuzzy-matches any suffix OR any existing character.
+        # Catches OCR garbling like AUCE->ALICE, SUTH->SOUTH, CRANDMA->GRANDMA.
+        try:
+            from rapidfuzz import fuzz as _sfuzz
+            if any(_sfuzz.ratio(cand, s) >= 60 for s in _name_suffixes):
+                continue
+            if any(_sfuzz.ratio(cand, ec) >= 60 for ec in potential_characters):
+                continue
+        except ImportError:
+            pass
         if _is_structurally_valid(cand):
             potential_characters.add(cand)
 
-    # Merge OCR-garbled duplicate character names (runs after both discovery passes).
-    # Names like "CRANDMA" or "FIRST DEARER" are removed so the fuzzy fallback inside
-    # the line parser maps them to the correct canonical character at parse time.
+    # Merge OCR-garbled duplicate character names
     _honorific_re = re.compile(r'^(MR|MRS|MS|DR|SR|JR)\.\s+')
     def _safe_to_merge(cand: str, canonical: str) -> bool:
-        """Return False for distinct characters that happen to score highly —
-        e.g. MR. SOUTH vs MRS. SOUTH differ by honorific and are different people."""
         m_cand = _honorific_re.match(cand)
         m_canon = _honorific_re.match(canonical)
         if m_cand and m_canon:
@@ -416,7 +538,6 @@ def parse_script_text(raw_text: str) -> list[dict]:
 
     try:
         from rapidfuzz import fuzz as _rfuzz
-        # Sort by frequency descending; second-pass names not in name_counter get 0
         _char_list = sorted(potential_characters, key=lambda n: -name_counter.get(n, 0))
         _ocr_remap: dict[str, str] = {}
         for i, cand in enumerate(_char_list):
@@ -433,34 +554,134 @@ def parse_script_text(raw_text: str) -> list[dict]:
     except ImportError:
         pass
 
-    # Pre-process: insert newlines before known character names buried mid-paragraph.
-    # pdfplumber collapses multi-column / complex layout into one long line, so
-    # "...I hope? FIRST BEARER. Never broke yet. SECOND BEARER. Holds up..." never
-    # gets split by the line-by-line parser. We fix this before splitting.
+    # -----------------------------------------------------------------------
+    # Build a sorted list of known character names for prefix matching.
+    # Longest first so "MRS. SOUTH" is tried before "MRS" or "SOUTH".
+    # -----------------------------------------------------------------------
+    sorted_chars = sorted(potential_characters, key=len, reverse=True)
+
+    def _match_known_character(text: str):
+        """
+        Check if text starts with a known character name (case-insensitive).
+        Returns (matched_name, rest_of_text) or (None, None).
+        Accepts various delimiters after the name: . : ; , _ - or OCR variants.
+        Also handles an optional bracketed stage direction between name and delimiter.
+        """
+        text_upper = text.upper().lstrip()
+        offset = len(text) - len(text.lstrip())
+        for char_name in sorted_chars:
+            if text_upper.startswith(char_name):
+                after = text[offset + len(char_name):]
+                # After the name, accept: optional whitespace, optional stage direction,
+                # optional delimiter (. : ; , _ -), then whitespace or end of string.
+                m = re.match(
+                    r'^[ \t]*'
+                    r'(?:[\[{(\\][^\]})\\]{0,80}[\]})\\][ \t]*)?'
+                    r'[:.;,_\-]?[ \t]*(.*)',
+                    after, re.DOTALL,
+                )
+                if m:
+                    rest = m.group(1).strip()
+                    # Guard: if there's no delimiter and no stage direction, the "rest"
+                    # must start with an uppercase letter or be empty (prevents splitting
+                    # on character names that appear as regular words in dialogue).
+                    has_delimiter = bool(re.match(
+                        r'^[ \t]*(?:[\[{(]|[:.;,_\-])',
+                        after,
+                    ))
+                    if has_delimiter or not rest or rest[0].isupper() or not after.strip():
+                        return char_name, rest
+        # Fuzzy fallback for OCR-garbled names (e.g. AUCE -> ALICE, CRANDMA -> GRANDMA)
+        try:
+            from rapidfuzz import process as rf_process
+            candidate_m = re.match(
+                r'^[ \t]*([A-Z][A-Za-z .\'-]{0,30}[A-Za-z])',
+                text,
+            )
+            if candidate_m:
+                candidate = candidate_m.group(1).strip().upper()
+                if len(candidate.split()) <= 4:
+                    # Lower threshold for ALL-CAPS candidates (strong signal that it's
+                    # a character cue, not a regular word). Use 65% to catch garbled
+                    # names like AUCE->ALICE (67%) while avoiding false positives.
+                    is_allcaps = candidate == candidate.upper() and candidate.isalpha() or \
+                                 re.fullmatch(r'[A-Z. ]+', candidate)
+                    cutoff = 65 if is_allcaps else 85
+                    best = rf_process.extractOne(
+                        candidate, potential_characters, score_cutoff=cutoff
+                    )
+                    if best:
+                        matched = best[0]
+                        after = text[candidate_m.end():]
+                        m = re.match(
+                            r'^[ \t]*(?:[\[{(\\][^\]})\\]{0,80}[\]})\\][ \t]*)?'
+                            r'[:.;,_\-]?[ \t]*(.*)',
+                            after, re.DOTALL,
+                        )
+                        if m:
+                            rest = m.group(1).strip()
+                            tail = matched[len(candidate):].lstrip(". ").upper()
+                            if tail and rest.upper().startswith(tail):
+                                return None, None
+                            return matched, rest
+        except ImportError:
+            pass
+        return None, None
+
+    # -----------------------------------------------------------------------
+    # Pre-process: insert newlines before character names buried mid-paragraph.
+    # More permissive than before: accepts , ; _ - as delimiters in addition
+    # to . and :, and handles a space before the delimiter.
+    # -----------------------------------------------------------------------
     if potential_characters:
-        sorted_chars = sorted(potential_characters, key=len, reverse=True)
         escaped = [re.escape(c) for c in sorted_chars]
-        # Match a character name that:
-        #   - is preceded by sentence-ending punctuation + whitespace (mid-paragraph)
-        #   - is followed by [.:] AND then actual dialogue text (space + non-whitespace)
-        # The text requirement prevents false splits on vocatives like "ready? NURSE."
-        # at end of a clause where NURSE is being addressed, not speaking.
+        # Pattern: after sentence-ending punctuation or certain other contexts,
+        # a known character name followed by any plausible delimiter
         mid_char_re = re.compile(
-            r'(?<=[.?!])\s+(' + "|".join(escaped) + r')(?=\s*[:.][ \t]+\S)'
+            r'(?<=[.?!;:\]}>)\'])\s+(' + "|".join(escaped) + r')'
+            r'(?=\s*[:.;,_\-]?\s+\S)',
+            re.IGNORECASE,
         )
         raw_text = mid_char_re.sub(r"\n\1", raw_text)
 
     # Detect repeated page-header strings (appear on 3+ pages) so we can strip them
-    # E.g. the play title "Whodunit?" printed at the top of every page
     all_raw_lines = raw_text.split("\n")
     line_freq: Counter = Counter(
         l.strip() for l in all_raw_lines
         if l.strip() and len(l.strip()) <= 60 and not l.strip()[0].islower()
     )
-    # Any short non-lowercase line that appears 4+ times is probably a header/footer
     page_noise = {text for text, cnt in line_freq.items() if cnt >= 4}
 
-    # Also strip bare page numbers (lines that are just digits, optionally with spaces)
+    # Also detect the play title from the cast list section (appears as page header).
+    # The title typically appears on the line just before "CHARACTERS" or as the first
+    # short line of the document. We look for it in cast_names' source text.
+    _title_re = re.compile(
+        r'(?:^|\n)\s*([A-Z][A-Za-z?!., ]{2,40}[?!.]?)\s*\n\s*(?:A\s|CHARACTERS|CAST)',
+        re.IGNORECASE,
+    )
+    _title_match = _title_re.search(full_text)
+    if _title_match:
+        _play_title = _title_match.group(1).strip()
+        if len(_play_title) <= 40:
+            page_noise.add(_play_title)
+
+    # Build patterns to strip page-noise from WITHIN dialogue text.
+    _page_noise_inline_patterns = []
+    for noise in page_noise:
+        esc = re.escape(noise)
+        # "Title N" pattern (e.g. "Whodunit? 13")
+        _page_noise_inline_patterns.append(re.compile(
+            r'\s*' + esc + r'\s+\d{1,3}\s*'
+        ))
+        # "N Title" pattern (e.g. "14 Whodunit?")
+        _page_noise_inline_patterns.append(re.compile(
+            r'\s*\d{1,3}\s+' + esc + r'\s*'
+        ))
+        # Bare title (e.g. "Whodunit?" on its own or at end of a line)
+        _page_noise_inline_patterns.append(re.compile(
+            r'\s+' + esc + r'\s*$'
+        ))
+
     _page_num_re = re.compile(r"^\s*\d{1,3}\s*$")
 
     lines = all_raw_lines
@@ -468,19 +689,17 @@ def parse_script_text(raw_text: str) -> list[dict]:
     current_character = None
     current_text_parts = []
     line_id = 1
-    first_dialogue_seen = False  # suppress preamble noise before first dialogue
+    first_dialogue_seen = False
 
-    # Matches inline stage directions embedded in dialogue, including OCR-mangled brackets.
-    # OCR commonly corrupts [ as \, l, or { and ] as l, ], or }
     _inline_stage_re = re.compile(
-        r'\[.*?\]'              # [standard stage direction]
-        r'|\(.*?\)'             # (parenthetical direction)
-        r'|\{[^}\]]{0,80}[\]}]' # {OCR curly-bracket variant} — closed by } or ]
-        r'|\\[A-Z][^\\]{0,80}\\' # \They sit at the table\ (OCR-mangled brackets)
-        r'|\\\^[^\\.]{0,80}\\'  # \^pleading\ OCR variant
-        r'|\[-[^\]]{0,60}\]'    # [-direction-] OCR variant
-        r'|\^\^[^^]{0,60}\^'    # ^^pleading^ OCR variant
-        r'|\^[A-Z][^^]{0,60}\^',  # ^Direction^ OCR variant
+        r'\[.*?\]'
+        r'|\(.*?\)'
+        r'|\{[^}\]]{0,80}[\]}]'
+        r'|\\[A-Z][^\\]{0,80}\\'
+        r'|\\\^[^\\.]{0,80}\\'
+        r'|\[-[^\]]{0,60}\]'
+        r'|\^\^[^^]{0,60}\^'
+        r'|\^[A-Z][^^]{0,60}\^',
         re.DOTALL,
     )
 
@@ -488,17 +707,14 @@ def parse_script_text(raw_text: str) -> list[dict]:
         nonlocal line_id, current_character, current_text_parts, first_dialogue_seen
         if current_character and current_text_parts:
             text = " ".join(current_text_parts).strip()
-            # Strip inline stage directions so they don't pollute spoken text
             text = _inline_stage_re.sub("", text)
-            # Strip stray unmatched closing brackets left by OCR artifacts
+            # Strip inline page headers/footers (e.g. "Whodunit? 13", "14 Whodunit?")
+            for pat in _page_noise_inline_patterns:
+                text = pat.sub(" ", text)
             text = re.sub(r"^\s*[\]})]+\s*", "", text)
             text = re.sub(r"\s*[\[{(]+\s*$", "", text)
-            # Collapse extra whitespace left behind
             text = re.sub(r"\s{2,}", " ", text).strip()
-            # Drop leading punctuation artifacts from stripped directions
             text = re.sub(r"^[.,:;]+\s*", "", text)
-            # Discard junk lines (only punctuation/brackets, or fewer than 3 words
-            # that are all-caps stage-direction noise)
             if text and len(text) >= 3 and not re.fullmatch(r'[\s\]\[)(}{.,!?;:\-]+', text):
                 result.append({
                     "id": line_id,
@@ -515,12 +731,24 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if not stripped:
             continue
 
-        # Skip bare page numbers and repeated page headers/footers
         if _page_num_re.match(stripped) or stripped in page_noise:
             continue
 
-        # Section headers like "SCENE:", "SETTING:", "PLACE:" flush dialogue and
-        # become stage directions rather than being swallowed as dialogue continuation
+        # Strip "N Title" and "Title N" page headers (e.g. "14 Whodunit?", "Whodunit? 13")
+        pnt_m = re.match(r'^\s*(\d{1,3})\s+(.+)$', stripped)
+        if pnt_m and pnt_m.group(2).strip() in page_noise:
+            continue
+        for noise_text in page_noise:
+            pnt_m2 = re.match(
+                r'^\s*' + re.escape(noise_text) + r'\s+(\d{1,3})\s*$', stripped
+            )
+            if pnt_m2:
+                break
+        else:
+            pnt_m2 = None
+        if pnt_m2:
+            continue
+
         _section_header = re.match(
             r"^(SCENE|SETTING|PLACE|TIME|ACT\s+\w+|SCENE\s+\w+)\b[:.]\s*(.*)",
             stripped, re.IGNORECASE
@@ -551,21 +779,27 @@ def parse_script_text(raw_text: str) -> list[dict]:
                 line_id += 1
             continue
 
+        # --- Known-character-first matching ---
+        # Try to match the line against known character names (longest first).
+        # This handles names with periods (MR. SOUTH), various delimiters, etc.
+        matched_char, rest = _match_known_character(stripped)
+        if matched_char:
+            flush_dialogue()
+            current_character = matched_char
+            if rest:
+                current_text_parts.append(rest)
+            continue
+
+        # --- Fallback: regex-based inline matching for unknown characters ---
         char_inline = re.match(
-            # Allow optional inline stage direction between name and delimiter.
-            # Handles clean brackets [dir], OCR curly variant {dir}, and mixed {dir].
-            # Examples: "ANNOUNCER [pleading]. Text" / "John {aside]. Text"
-            # Mixed case accepted here; name is normalised to ALL CAPS for lookup.
             r"^[ \t]*([A-Z][A-Za-z .'-]{0,30}[A-Za-z])[ \t]*"
-            r"(?:[\[{][^\]}{]{0,80}[\]}\)][ \t]*)?"  # optional stage direction
+            r"(?:[\[{][^\]}{]{0,80}[\]}\)][ \t]*)?"
             r"[:.][ \t]*(.*)",
             stripped,
         )
         if char_inline:
             name = char_inline.group(1).strip()
-            # Normalise to ALL CAPS — potential_characters stores names in ALL CAPS
             name_upper = name.upper()
-            # Skip if too many words (sentences starting with a capital would match)
             if len(name.split()) <= 4:
                 rest = char_inline.group(2).strip()
                 matched_char = None
@@ -574,11 +808,6 @@ def parse_script_text(raw_text: str) -> list[dict]:
                 elif name in potential_characters:
                     matched_char = name
                 else:
-                    # Fuzzy fallback: accept if rapidfuzz finds a close match (≥85 score).
-                    # Guard: reject prefix-only matches caused by regex backtracking.
-                    # E.g. "MRS. SOUTH wears..." backtracks to name="MRS", which fuzzy-
-                    # matches "MRS. SOUTH" at 90% via prefix. Detect this by checking
-                    # whether the rest starts with the "missing" tail of the matched char.
                     try:
                         from rapidfuzz import process as rf_process
                         best = rf_process.extractOne(
@@ -586,11 +815,9 @@ def parse_script_text(raw_text: str) -> list[dict]:
                         )
                         if best:
                             candidate = best[0]
-                            # Reject if name is a clean prefix of candidate and rest
-                            # immediately continues with the missing suffix.
                             tail = candidate[len(name_upper):].lstrip(". ").upper()
                             if tail and rest.upper().startswith(tail):
-                                pass  # backtracking false positive — skip
+                                pass
                             else:
                                 matched_char = candidate
                     except ImportError:
@@ -610,10 +837,8 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if upper_stripped in potential_characters:
             standalone_char = upper_stripped
         elif upper_stripped.upper() in potential_characters and len(upper_stripped.split()) <= 4:
-            # Mixed-case script: "Oberon" normalises to "OBERON" which is in potential_characters
             standalone_char = upper_stripped.upper()
         elif len(upper_stripped) >= 2 and upper_stripped == upper_stripped.upper():
-            # Fuzzy fallback for standalone OCR-garbled ALL CAPS character-name-only lines
             try:
                 from rapidfuzz import process as rf_process
                 best = rf_process.extractOne(
@@ -631,8 +856,6 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if current_character:
             current_text_parts.append(stripped)
         elif first_dialogue_seen:
-            # Only emit stage directions after the first real dialogue line —
-            # everything before it is preamble (cast lists, copyright, synopsis).
             result.append({
                 "id": line_id,
                 "type": "stage_direction",
@@ -662,6 +885,11 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
       This catches OCR transpositions ("teh"->"the") while avoiding
       aggressive rewrites of unusual but correct vocabulary.
     - All-caps tokens and tokens with digits are always skipped.
+    - Words shorter than 4 characters are skipped (too likely to be fragments
+      from broken PDF line wraps where correction is unreliable).
+    - Corrections that produce profanity or inappropriate words are rejected.
+    - Adjacent word fragments that together form a valid word are rejoined
+      before spell-checking.
     - Corrections are stored in line["_corrections"] as a list of
       {original, corrected} dicts so the frontend can show diffs and
       allow per-word reverts.
@@ -669,10 +897,8 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
     try:
         from spellchecker import SpellChecker
     except ImportError:
-        # pyspellchecker not installed — return lines unchanged
         return lines
 
-    # --- build protected word set ---
     from collections import Counter as _Counter
 
     char_names: set[str] = set()
@@ -680,36 +906,70 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
 
     for line in lines:
         if line.get("character"):
-            # Protect every token of the character name
             for tok in line["character"].split():
                 char_names.add(tok.lower())
         if line.get("type") == "dialogue" and line.get("text"):
             for tok in re.findall(r"[a-zA-Z']+", line["text"]):
                 word_freq[tok.lower()] += 1
 
-    # Words appearing 2+ times are treated as known/intentional
     frequent_words = {w for w, c in word_freq.items() if c >= 2}
     protected = char_names | frequent_words
 
     spell = SpellChecker()
     spell.word_frequency.load_words(protected)
 
+    # Words we should never "correct" a token to
+    _bad_corrections = {
+        "slut", "sluts", "shit", "shits", "fuck", "fucks",
+        "ass", "bitch", "crap", "dick", "piss", "whore", "cock",
+        "bastard", "arse", "tit", "tits", "rum", "gct", "tic", "lox",
+        "hose", "zinc", "nit",
+    }
+
     def _edit_distance(a: str, b: str) -> int:
-        """Simple edit distance (no full DP needed — we only care if it's 1)."""
         if abs(len(a) - len(b)) > 1:
             return 2
         if a == b:
             return 0
-        # Substitution / transposition check for same-length strings
         if len(a) == len(b):
             diffs = sum(x != y for x, y in zip(a, b))
             return 1 if diffs == 1 else 2
-        # Insertion / deletion
         longer, shorter = (a, b) if len(a) > len(b) else (b, a)
         for i in range(len(longer)):
             if longer[:i] + longer[i+1:] == shorter:
                 return 1
         return 2
+
+    def _rejoin_fragments(parts: list[str]) -> list[str]:
+        """
+        Scan word tokens for adjacent fragments that are individually unknown
+        but form a valid word when joined. E.g. ["trem", "bling"] -> ["trembling"].
+        This handles words that were broken across PDF lines.
+        """
+        result = []
+        i = 0
+        while i < len(parts):
+            # Only try joining word tokens (skip non-word separators)
+            if not re.fullmatch(r"[a-zA-Z']+", parts[i]):
+                result.append(parts[i])
+                i += 1
+                continue
+
+            # Look ahead: skip one whitespace separator and check next word token
+            if (i + 2 < len(parts)
+                    and re.fullmatch(r'\s+', parts[i + 1])
+                    and re.fullmatch(r"[a-zA-Z']+", parts[i + 2])):
+                combined = parts[i] + parts[i + 2]
+                # Join if both halves are unknown but the combination is known
+                if (spell.unknown([parts[i]]) and spell.unknown([parts[i + 2]])
+                        and not spell.unknown([combined])):
+                    result.append(combined)
+                    i += 3
+                    continue
+
+            result.append(parts[i])
+            i += 1
+        return result
 
     corrected_lines = []
     for line in lines:
@@ -720,16 +980,18 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
         text = line["text"]
         corrections: list[dict] = []
 
-        # Tokenise while preserving positions so we can do in-place replacement
-        # Match word tokens; non-word characters are passed through unchanged.
         parts = re.split(r"(\b[a-zA-Z']+\b)", text)
+
+        # Rejoin broken word fragments before spell-checking
+        parts = _rejoin_fragments(parts)
+
         new_parts = []
         for part in parts:
-            # Skip non-word segments, all-caps tokens, short tokens, protected words
             if not re.fullmatch(r"[a-zA-Z']+", part):
                 new_parts.append(part)
                 continue
-            if part.isupper() or len(part) <= 2 or part.lower() in protected:
+            # Skip all-caps, very short tokens (likely fragments), protected words
+            if part.isupper() or len(part) <= 3 or part.lower() in protected:
                 new_parts.append(part)
                 continue
 
@@ -743,12 +1005,32 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
                 new_parts.append(part)
                 continue
 
-            # Only accept single-edit-distance corrections
             if _edit_distance(part.lower(), candidate) != 1:
                 new_parts.append(part)
                 continue
 
-            # Preserve original capitalisation pattern
+            # Reject inappropriate corrections
+            if candidate.lower() in _bad_corrections:
+                new_parts.append(part)
+                continue
+
+            # Skip word fragments: if the original word is a prefix or suffix
+            # of a known longer word, it's likely a fragment from a PDF line
+            # break, not a misspelling. E.g. "solv" -> "solve", "fession" -> "profession"
+            _part_lower = part.lower()
+            # Prefix check: word + one common letter = known word?
+            _known = spell.known([_part_lower + c for c in "aeiourstnlde"])
+            if _known:
+                new_parts.append(part)
+                continue
+            # Suffix check: common prefix + word = known word?
+            _prefixes = ("pro", "pre", "con", "com", "dis", "mis", "un", "re",
+                         "de", "ex", "in", "im", "ir", "il", "over", "under",
+                         "out", "sub", "super", "inter", "trans", "non")
+            if any(spell.known([pfx + _part_lower]) for pfx in _prefixes):
+                new_parts.append(part)
+                continue
+
             if part[0].isupper():
                 candidate = candidate[0].upper() + candidate[1:]
 
