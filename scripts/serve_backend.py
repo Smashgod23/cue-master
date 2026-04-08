@@ -153,7 +153,7 @@ def _extract_cast_names(full_text: str) -> set[str]:
     list is available even though it appears before the play body.
     """
     cast_match = re.search(
-        r'(?:^|\n)\s*(?:CHARACTERS|CAST(?:\s+OF\s+CHARACTERS)?)\s*\n',
+        r'(?:^|\n)\s*(?:CHARACTERS|CAST(?:\s+OF\s+CHARACTERS)?)\s*[:.]*\s*\n',
         full_text, re.IGNORECASE,
     )
     if not cast_match:
@@ -589,6 +589,15 @@ def parse_script_text(raw_text: str) -> list[dict]:
                         r'^[ \t]*(?:[\[{(]|[:.;,_\-])',
                         after,
                     ))
+                    if not has_delimiter and rest:
+                        # Reject title patterns like "ROMEO AND JULIET" where
+                        # a conjunction links to another character name
+                        rest_words = rest.upper().split()
+                        if (rest_words and rest_words[0] in ('AND', 'OR', 'VS', 'VS.')
+                                and len(rest_words) >= 2):
+                            tail_name = ' '.join(rest_words[1:])
+                            if any(tail_name.startswith(c) for c in sorted_chars):
+                                continue  # skip this char_name, try next
                     if has_delimiter or not rest or rest[0].isupper() or not after.strip():
                         return char_name, rest
         # Fuzzy fallback for OCR-garbled names (e.g. AUCE -> ALICE, CRANDMA -> GRANDMA)
@@ -607,11 +616,25 @@ def parse_script_text(raw_text: str) -> list[dict]:
                     is_allcaps = candidate == candidate.upper() and candidate.isalpha() or \
                                  re.fullmatch(r'[A-Z. ]+', candidate)
                     cutoff = 65 if is_allcaps else 85
+                    from rapidfuzz import fuzz as _rf_fuzz
                     best = rf_process.extractOne(
-                        candidate, potential_characters, score_cutoff=cutoff
+                        candidate, potential_characters,
+                        scorer=_rf_fuzz.ratio, score_cutoff=cutoff
                     )
                     if best:
                         matched = best[0]
+                        # Reject vocative patterns: a short interjection word
+                        # followed by a known character name (e.g. "O ROMEO",
+                        # "OH JULIET") is dialogue, not a character cue.
+                        cand_words = candidate.split()
+                        _vocative_interjections = {
+                            'O', 'OH', 'AH', 'DEAR', 'SWEET', 'GOOD',
+                            'FAIR', 'POOR', 'MY', 'HIS', 'HER', 'A',
+                        }
+                        if (len(cand_words) >= 2
+                                and cand_words[0] in _vocative_interjections
+                                and cand_words[-1] in potential_characters):
+                            return None, None
                         after = text[candidate_m.end():]
                         m = re.match(
                             r'^[ \t]*(?:[\[{(\\][^\]})\\]{0,80}[\]})\\][ \t]*)?'
@@ -650,7 +673,8 @@ def parse_script_text(raw_text: str) -> list[dict]:
         l.strip() for l in all_raw_lines
         if l.strip() and len(l.strip()) <= 60 and not l.strip()[0].islower()
     )
-    page_noise = {text for text, cnt in line_freq.items() if cnt >= 4}
+    page_noise = {text for text, cnt in line_freq.items()
+                  if cnt >= 4 and text.upper() not in potential_characters}
 
     # Also detect the play title from the cast list section (appears as page header).
     # The title typically appears on the line just before "CHARACTERS" or as the first
@@ -809,9 +833,10 @@ def parse_script_text(raw_text: str) -> list[dict]:
                     matched_char = name
                 else:
                     try:
-                        from rapidfuzz import process as rf_process
+                        from rapidfuzz import process as rf_process, fuzz as rf_fuzz
                         best = rf_process.extractOne(
-                            name_upper, potential_characters, score_cutoff=85
+                            name_upper, potential_characters,
+                            scorer=rf_fuzz.ratio, score_cutoff=85
                         )
                         if best:
                             candidate = best[0]
@@ -840,9 +865,12 @@ def parse_script_text(raw_text: str) -> list[dict]:
             standalone_char = upper_stripped.upper()
         elif len(upper_stripped) >= 2 and upper_stripped == upper_stripped.upper():
             try:
-                from rapidfuzz import process as rf_process
+                from rapidfuzz import process as rf_process, fuzz as rf_fuzz
+                # Use fuzz.ratio (not default WRatio) so substring matches
+                # like "ROMEO AND JULIET" vs "ROMEO" don't get inflated scores
                 best = rf_process.extractOne(
-                    upper_stripped, potential_characters, score_cutoff=85
+                    upper_stripped, potential_characters,
+                    scorer=rf_fuzz.ratio, score_cutoff=85
                 )
                 if best:
                     standalone_char = best[0]
@@ -1006,6 +1034,24 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
                 continue
 
             if _edit_distance(part.lower(), candidate) != 1:
+                new_parts.append(part)
+                continue
+
+            # Protect archaic verb forms common in plays (e.g. stumblest,
+            # walketh). If removing an archaic suffix yields a known word,
+            # the original is intentional, not a typo. Only -est and -eth
+            # are safe; shorter suffixes like -st/-th risk protecting real
+            # misspellings (e.g. "forst" -> base "for" is a word).
+            _pl = part.lower()
+            _is_archaic = False
+            for _suffix in ('est', 'eth'):
+                if _pl.endswith(_suffix) and len(_pl) > len(_suffix) + 2:
+                    _base = _pl[:-len(_suffix)]
+                    # Also try adding 'e' back (e.g. "stumblest" -> "stumble")
+                    if not spell.unknown([_base]) or not spell.unknown([_base + 'e']):
+                        _is_archaic = True
+                        break
+            if _is_archaic:
                 new_parts.append(part)
                 continue
 
