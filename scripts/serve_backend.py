@@ -563,7 +563,10 @@ def parse_script_text(raw_text: str) -> list[dict]:
     def _match_known_character(text: str):
         """
         Check if text starts with a known character name (case-insensitive).
-        Returns (matched_name, rest_of_text) or (None, None).
+        Returns (matched_name, rest_of_text, extracted_stage) or (None, None, None).
+        extracted_stage is a recovered stage direction string when OCR dropped
+        the opening bracket but left a closing bracket immediately after the
+        character name (e.g. "MALCOLM to grandma]. He's here.").
         Accepts various delimiters after the name: . : ; , _ - or OCR variants.
         Also handles an optional bracketed stage direction between name and delimiter.
         """
@@ -589,6 +592,20 @@ def parse_script_text(raw_text: str) -> list[dict]:
                         r'^[ \t]*(?:[\[{(]|[:.;,_\-])',
                         after,
                     ))
+                    # OCR-damaged stage direction: when the opening bracket was
+                    # dropped but the closer survived within the first ~80 chars
+                    # of rest with no earlier opener, extract the damaged
+                    # direction as its own stage line. Catches cases like
+                    # "MALCOLM to grandma]. He's here." (original was
+                    # "MALCOLM [to grandma]. He's here.").
+                    extracted_stage = None
+                    if not has_delimiter and rest:
+                        head = rest[:80]
+                        orphan_close = re.search(r'[\]\)\}]', head)
+                        if orphan_close and not re.search(r'[\[\(\{]', head[:orphan_close.start()]):
+                            extracted_stage = rest[:orphan_close.start()].strip(" \t,.;:")
+                            rest = rest[orphan_close.end():].lstrip(" \t.:,;-_")
+                            has_delimiter = True
                     if not has_delimiter and rest:
                         # Reject title patterns like "ROMEO AND JULIET" where
                         # a conjunction links to another character name
@@ -598,8 +615,15 @@ def parse_script_text(raw_text: str) -> list[dict]:
                             tail_name = ' '.join(rest_words[1:])
                             if any(tail_name.startswith(c) for c in sorted_chars):
                                 continue  # skip this char_name, try next
-                    if has_delimiter or not rest or rest[0].isupper() or not after.strip():
-                        return char_name, rest
+                    # Distinctive character names (>= 5 chars) rarely collide
+                    # with regular words, so accept even when the rest is
+                    # lowercase — this rescues cues from OCR-damaged lines
+                    # like "ALICE oul xvtn(loxv\\ He's been..." where the
+                    # stage direction brackets were destroyed.
+                    distinctive = len(char_name.replace(" ", "")) >= 5
+                    if (has_delimiter or not rest or rest[0].isupper()
+                            or distinctive or not after.strip()):
+                        return char_name, rest, extracted_stage
         # Fuzzy fallback for OCR-garbled names (e.g. AUCE -> ALICE, CRANDMA -> GRANDMA)
         try:
             from rapidfuzz import process as rf_process
@@ -634,7 +658,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
                         if (len(cand_words) >= 2
                                 and cand_words[0] in _vocative_interjections
                                 and cand_words[-1] in potential_characters):
-                            return None, None
+                            return None, None, None
                         after = text[candidate_m.end():]
                         m = re.match(
                             r'^[ \t]*(?:[\[{(\\][^\]})\\]{0,80}[\]})\\][ \t]*)?'
@@ -645,11 +669,11 @@ def parse_script_text(raw_text: str) -> list[dict]:
                             rest = m.group(1).strip()
                             tail = matched[len(candidate):].lstrip(". ").upper()
                             if tail and rest.upper().startswith(tail):
-                                return None, None
-                            return matched, rest
+                                return None, None, None
+                            return matched, rest, None
         except ImportError:
             pass
-        return None, None
+        return None, None, None
 
     # -----------------------------------------------------------------------
     # Pre-process: insert newlines before character names buried mid-paragraph.
@@ -840,10 +864,18 @@ def parse_script_text(raw_text: str) -> list[dict]:
         # --- Known-character-first matching ---
         # Try to match the line against known character names (longest first).
         # This handles names with periods (MR. SOUTH), various delimiters, etc.
-        matched_char, rest = _match_known_character(stripped)
+        matched_char, rest, extracted_stage = _match_known_character(stripped)
         if matched_char:
             flush_dialogue()
             current_character = matched_char
+            if extracted_stage and first_dialogue_seen:
+                result.append({
+                    "id": line_id,
+                    "type": "stage_direction",
+                    "character": "",
+                    "text": extracted_stage,
+                })
+                line_id += 1
             if rest:
                 current_text_parts.append(rest)
             continue
