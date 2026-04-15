@@ -729,22 +729,85 @@ def parse_script_text(raw_text: str) -> list[dict]:
 
     def flush_dialogue():
         nonlocal line_id, current_character, current_text_parts, first_dialogue_seen
-        if current_character and current_text_parts:
-            text = " ".join(current_text_parts).strip()
-            text = _inline_stage_re.sub("", text)
-            # Strip inline page headers/footers (e.g. "Whodunit? 13", "14 Whodunit?")
-            for pat in _page_noise_inline_patterns:
-                text = pat.sub(" ", text)
-            text = re.sub(r"^\s*[\]})]+\s*", "", text)
-            text = re.sub(r"\s*[\[{(]+\s*$", "", text)
-            text = re.sub(r"\s{2,}", " ", text).strip()
-            text = re.sub(r"^[.,:;]+\s*", "", text)
-            if text and len(text) >= 3 and not re.fullmatch(r'[\s\]\[)(}{.,!?;:\-]+', text):
+        if not (current_character and current_text_parts):
+            current_text_parts = []
+            return
+
+        text = " ".join(current_text_parts).strip()
+        for pat in _page_noise_inline_patterns:
+            text = pat.sub(" ", text)
+
+        # Split on inline stage directions so each becomes its own line instead
+        # of being silently deleted from the surrounding dialogue.
+        segments: list[tuple[str, str]] = []
+        pos = 0
+        for m in _inline_stage_re.finditer(text):
+            if m.start() > pos:
+                segments.append(("dialogue", text[pos:m.start()]))
+            direction = m.group(0).strip("[](){}\\^ \t")
+            if direction:
+                segments.append(("stage", direction))
+            pos = m.end()
+        if pos < len(text):
+            segments.append(("dialogue", text[pos:]))
+        if not segments:
+            segments.append(("dialogue", text))
+
+        # Orphan closing-bracket recovery: OCR sometimes drops the opening
+        # [ or (. If a dialogue segment contains a stray ] or ) with no
+        # matching opener, split at the last sentence boundary and treat
+        # the tail as a stage direction.
+        recovered: list[tuple[str, str]] = []
+        for kind, content in segments:
+            if kind != "dialogue":
+                recovered.append((kind, content))
+                continue
+            orphan = re.search(r"[\]\)\}]", content)
+            if orphan and not re.search(r"[\[\(\{]", content[:orphan.start()]):
+                before = content[:orphan.start()]
+                after = content[orphan.end():]
+                boundaries = list(re.finditer(r"[.!?]\s+", before))
+                if boundaries:
+                    cut = boundaries[-1].end()
+                    head, tail = before[:cut].strip(), before[cut:].strip()
+                    if head:
+                        recovered.append(("dialogue", head))
+                    if tail:
+                        recovered.append(("stage", tail))
+                else:
+                    stripped = before.strip()
+                    if stripped:
+                        recovered.append(("stage", stripped))
+                if after.strip():
+                    recovered.append(("dialogue", after))
+            else:
+                recovered.append((kind, content))
+
+        for kind, content in recovered:
+            content = re.sub(r"^\s*[\]})]+\s*", "", content)
+            content = re.sub(r"\s*[\[{(]+\s*$", "", content)
+            content = re.sub(r"\s{2,}", " ", content).strip()
+            content = re.sub(r"^[.,:;]+\s*", "", content)
+            if not content or len(content) < 3:
+                continue
+            if re.fullmatch(r'[\s\]\[)(}{.,!?;:\-]+', content):
+                continue
+            if kind == "stage":
+                if not first_dialogue_seen:
+                    continue
+                result.append({
+                    "id": line_id,
+                    "type": "stage_direction",
+                    "character": "",
+                    "text": content,
+                })
+                line_id += 1
+            else:
                 result.append({
                     "id": line_id,
                     "type": "dialogue",
                     "character": current_character,
-                    "text": text,
+                    "text": content,
                 })
                 line_id += 1
                 first_dialogue_seen = True
