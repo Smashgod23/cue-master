@@ -1249,24 +1249,23 @@ def llm_cleanup_script(lines: list[dict]) -> list[dict]:
         fixed = (fixed or "").strip()
         if not fixed or fixed == original:
             continue
-        new_line = dict(lines[idx])
-        new_line["text"] = fixed
 
-        # Emit one _corrections entry per changed word so the review UI can
-        # highlight and individually undo each LLM edit. The UI tokenizes on
-        # word boundaries and matches by lowercased word, so positional
-        # alignment only matters when word counts match.
+        # Only apply the cleanup when we can map every change to a per-word
+        # correction the review UI can highlight and revert. If the model
+        # inserted or removed a word we can't pair tokens reliably, so the
+        # change would be invisible and non-undoable in ScriptReview --
+        # skip it and leave the original OCR text for manual editing.
         orig_words = re.findall(r"[A-Za-z']+", original)
         fixed_words = re.findall(r"[A-Za-z']+", fixed)
+        if len(orig_words) != len(fixed_words):
+            continue
+
+        new_line = dict(lines[idx])
+        new_line["text"] = fixed
         existing = list(new_line.get("_corrections", []))
-        if len(orig_words) == len(fixed_words):
-            for ow, fw in zip(orig_words, fixed_words):
-                if ow.lower() != fw.lower():
-                    existing.append({"original": ow, "corrected": fw, "source": "llm"})
-        # When word counts differ (rare; ±1 allowed by the cleanup guard),
-        # we can't reliably pair original→corrected tokens, so we skip the
-        # per-word highlight/undo metadata. The line text is still updated;
-        # the user just loses inline undo for that one line.
+        for ow, fw in zip(orig_words, fixed_words):
+            if ow.lower() != fw.lower():
+                existing.append({"original": ow, "corrected": fw, "source": "llm"})
         new_line["_corrections"] = existing
         lines[idx] = new_line
 
