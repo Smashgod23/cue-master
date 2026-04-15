@@ -753,37 +753,7 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if not segments:
             segments.append(("dialogue", text))
 
-        # Orphan closing-bracket recovery: OCR sometimes drops the opening
-        # [ or (. If a dialogue segment contains a stray ] or ) with no
-        # matching opener, split at the last sentence boundary and treat
-        # the tail as a stage direction.
-        recovered: list[tuple[str, str]] = []
         for kind, content in segments:
-            if kind != "dialogue":
-                recovered.append((kind, content))
-                continue
-            orphan = re.search(r"[\]\)\}]", content)
-            if orphan and not re.search(r"[\[\(\{]", content[:orphan.start()]):
-                before = content[:orphan.start()]
-                after = content[orphan.end():]
-                boundaries = list(re.finditer(r"[.!?]\s+", before))
-                if boundaries:
-                    cut = boundaries[-1].end()
-                    head, tail = before[:cut].strip(), before[cut:].strip()
-                    if head:
-                        recovered.append(("dialogue", head))
-                    if tail:
-                        recovered.append(("stage", tail))
-                else:
-                    stripped = before.strip()
-                    if stripped:
-                        recovered.append(("stage", stripped))
-                if after.strip():
-                    recovered.append(("dialogue", after))
-            else:
-                recovered.append((kind, content))
-
-        for kind, content in recovered:
             content = re.sub(r"^\s*[\]})]+\s*", "", content)
             content = re.sub(r"\s*[\[{(]+\s*$", "", content)
             content = re.sub(r"\s{2,}", " ", content).strip()
@@ -793,8 +763,9 @@ def parse_script_text(raw_text: str) -> list[dict]:
             if re.fullmatch(r'[\s\]\[)(}{.,!?;:\-]+', content):
                 continue
             if kind == "stage":
-                if not first_dialogue_seen:
-                    continue
+                # current_character is set, so play has started — emit even
+                # when this stage direction precedes the first dialogue segment
+                # in the flush (e.g. "ALICE. [entering] Hello").
                 result.append({
                     "id": line_id,
                     "type": "stage_direction",
