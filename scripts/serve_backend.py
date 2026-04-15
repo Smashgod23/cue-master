@@ -1263,14 +1263,10 @@ def llm_cleanup_script(lines: list[dict]) -> list[dict]:
             for ow, fw in zip(orig_words, fixed_words):
                 if ow.lower() != fw.lower():
                     existing.append({"original": ow, "corrected": fw, "source": "llm"})
-        else:
-            # Word counts differ (rare; allowed within +/-1 by the guard).
-            # Diff the sets so each changed word is still individually
-            # highlightable in the review UI.
-            orig_set = {w.lower() for w in orig_words}
-            for fw in fixed_words:
-                if fw.lower() not in orig_set:
-                    existing.append({"original": fw, "corrected": fw, "source": "llm"})
+        # When word counts differ (rare; ±1 allowed by the cleanup guard),
+        # we can't reliably pair original→corrected tokens, so we skip the
+        # per-word highlight/undo metadata. The line text is still updated;
+        # the user just loses inline undo for that one line.
         new_line["_corrections"] = existing
         lines[idx] = new_line
 
