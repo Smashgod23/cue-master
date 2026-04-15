@@ -67,6 +67,32 @@ class DirectorResponse(BaseModel):
     Feedback: str
 
 
+class CleanupRequest(BaseModel):
+    lines: list[str]
+
+
+class CleanupResponse(BaseModel):
+    cleaned: list[str]
+
+
+CLEANUP_SYSTEM_PROMPT = (
+    "Fix OCR letter-swap errors in a single script line. Only correct "
+    "obvious misreadings where one letter was mistaken for another "
+    "(c<->e, l<->I, O<->0, n<->h, t<->f, u<->n). Never add new words, "
+    "never rephrase, never explain. Keep the same number of words and "
+    "the same sentence structure. If you are not confident, return the "
+    "line unchanged. Output ONLY the corrected line with no prefix, "
+    "quotes, or commentary.\n\n"
+    "Examples:\n"
+    "Input: I SCC.\nOutput: I see.\n"
+    "Input: Thcrc, there, lamb.\nOutput: There, there, lamb.\n"
+    "Input: Hc's hcfc.\nOutput: He's here.\n"
+    "Input: I ncvcf called anyone.\nOutput: I never called anyone.\n"
+    "Input: Cienches his fsts.\nOutput: Clenches his fists.\n"
+    "Input: Hello there.\nOutput: Hello there."
+)
+
+
 def load_model():
     """Load the fine-tuned model (merged or base+adapter)."""
     global _model, _tokenizer, _model_source
@@ -137,6 +163,110 @@ async def health():
         "status": "ok" if _model is not None else "loading",
         "model": _model_source or "not loaded",
     }
+
+
+@app.post("/api/director/cleanup", response_model=CleanupResponse)
+async def cleanup(request: CleanupRequest):
+    """
+    Fix OCR errors in a batch of script lines. Runs one generation per
+    line (small max_tokens) so the cost scales with the number of
+    actually-damaged lines the backend flags, not the whole script.
+    Everything runs locally — no API calls, no cost.
+    """
+    from mlx_lm import generate
+
+    cleaned: list[str] = []
+    for raw_line in request.lines:
+        trimmed = (raw_line or "").strip()
+        if not trimmed:
+            cleaned.append(raw_line)
+            continue
+
+        prompt = (
+            f"<|system|>\n{CLEANUP_SYSTEM_PROMPT}<|end|>\n"
+            f"<|user|>\n{trimmed}<|end|>\n"
+            f"<|assistant|>\n"
+        )
+
+        raw = generate(
+            _model,
+            _tokenizer,
+            prompt=prompt,
+            max_tokens=min(200, len(trimmed.split()) * 4 + 20),
+            verbose=False,
+        )
+
+        fixed = raw.strip()
+        for token in ["<|end|>", "<|endoftext|>", "</s>", "<unk>"]:
+            fixed = fixed.split(token)[0]
+        # Take only the first line — examples in the prompt can cause the
+        # model to keep generating Input/Output pairs.
+        fixed = fixed.split("\n")[0].strip().strip('"').strip("'").strip()
+        # Strip any "Output:" prefix the model sometimes echoes.
+        if fixed.lower().startswith("output:"):
+            fixed = fixed[7:].strip()
+
+        if not fixed or fixed.startswith("{"):
+            cleaned.append(raw_line)
+            continue
+
+        # Guard against hallucinations: fine-tuned director drifts toward
+        # rewriting content. Enforce that every output word is either
+        # present verbatim in the input or within edit distance 2 of some
+        # input word (the letter-swap limit for OCR cleanup).
+        import re as _re
+        in_tokens = _re.findall(r"[A-Za-z']+", trimmed.lower())
+        out_tokens = _re.findall(r"[A-Za-z']+", fixed.lower())
+        if abs(len(out_tokens) - len(in_tokens)) > 1:
+            cleaned.append(raw_line)
+            continue
+        if abs(len(fixed) - len(trimmed)) > max(6, len(trimmed) // 4):
+            cleaned.append(raw_line)
+            continue
+
+        try:
+            from rapidfuzz.distance import Levenshtein as _lev
+        except ImportError:
+            _lev = None
+
+        def _is_damaged(tok: str) -> bool:
+            if len(tok) < 3:
+                return False
+            # Vowel-less token of 3+ letters is almost always OCR damage
+            # ("scc", "fsts", "ncvcf"). Short words like "mrs"/"dr" are
+            # preserved by the model itself (it rarely rewrites them).
+            if not _re.search(r'[aeiouy]', tok):
+                return True
+            if _re.search(r'[a-z][A-Z][a-z]', tok):
+                return True
+            return False
+
+        reject = False
+        if _lev is not None and in_tokens:
+            in_set = set(in_tokens)
+            for w in out_tokens:
+                if w in in_set:
+                    continue
+                # Find nearest input word; allow a larger edit budget only
+                # when that input word itself looks OCR-damaged. A clean
+                # word like "wears" being rewritten to "wore" (distance 3)
+                # should be rejected, but a garbled word like "ncvcf" being
+                # rewritten to "never" (distance 3) should pass.
+                nearest_iw, nearest_dist = min(
+                    ((iw, _lev.distance(w, iw)) for iw in in_tokens),
+                    key=lambda p: p[1],
+                )
+                budget = 3 if _is_damaged(nearest_iw) else 1
+                if nearest_dist > budget:
+                    reject = True
+                    break
+
+        if reject:
+            cleaned.append(raw_line)
+            continue
+        cleaned.append(fixed)
+
+    return CleanupResponse(cleaned=cleaned)
 
 
 @app.post("/api/director", response_model=DirectorResponse)

@@ -1173,6 +1173,93 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Post-OCR LLM cleanup
+# ---------------------------------------------------------------------------
+
+DIRECTOR_URL = os.environ.get("DIRECTOR_URL", "http://127.0.0.1:8001")
+
+
+def _line_needs_llm_cleanup(text: str) -> bool:
+    """
+    Flag dialogue lines that the spellchecker couldn't fully fix.
+    Signals we trust:
+    - Any word with an internal uppercase letter surrounded by lowercase
+      (e.g. "soTcosm", "Hcllm", "Thcrc'Il" — classic OCR case corruption).
+    - Token with no vowel and length >= 4 (e.g. "hcfc", "fsts", "ncvcf").
+    - Tokens containing digits adjacent to letters (e.g. "sa4y").
+    - Stray OCR-junk characters (\\, ^, |) embedded in prose.
+    """
+    if not text or len(text) < 6:
+        return False
+    if re.search(r'\\|\^[A-Za-z]|\|[A-Za-z]', text):
+        return True
+    for token in re.findall(r"[A-Za-z][A-Za-z']{2,}", text):
+        if re.search(r'[a-z][A-Z][a-z]', token):
+            return True
+        if len(token) >= 4 and not re.search(r'[aeiouyAEIOUY]', token):
+            return True
+    if re.search(r'[a-zA-Z]\d[a-zA-Z]|[a-zA-Z]{2,}\d|\d[a-zA-Z]{2,}', text):
+        return True
+    return False
+
+
+def llm_cleanup_script(lines: list[dict]) -> list[dict]:
+    """
+    Send lines flagged as OCR-damaged to the local Phi-3 director model
+    for letter-level cleanup. Everything runs on-device; no API calls,
+    no cost, no rate limits. Falls back to the original text if the
+    director is unreachable or a request fails.
+    """
+    suspicious: list[tuple[int, str]] = []
+    for idx, line in enumerate(lines):
+        if line.get("type") != "dialogue":
+            continue
+        if _line_needs_llm_cleanup(line.get("text", "")):
+            suspicious.append((idx, line["text"]))
+
+    if not suspicious:
+        return lines
+
+    try:
+        import urllib.request
+        import urllib.error
+
+        payload = json.dumps({"lines": [t for _, t in suspicious]}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{DIRECTOR_URL}/api/director/cleanup",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        # Generous timeout: suspicious set is typically 10-30 lines, each
+        # taking 1-3s on Apple Silicon. Never blocks forever.
+        timeout = min(300, 8 + 4 * len(suspicious))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        cleaned_list = data.get("cleaned", [])
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as exc:
+        print(f"[llm_cleanup] director unreachable ({exc}); skipping")
+        return lines
+
+    if len(cleaned_list) != len(suspicious):
+        print(f"[llm_cleanup] size mismatch {len(cleaned_list)} vs {len(suspicious)}; skipping")
+        return lines
+
+    for (idx, original), fixed in zip(suspicious, cleaned_list):
+        fixed = (fixed or "").strip()
+        if not fixed or fixed == original:
+            continue
+        new_line = dict(lines[idx])
+        new_line["text"] = fixed
+        existing = list(new_line.get("_corrections", []))
+        existing.append({"original": original, "corrected": fixed, "source": "llm"})
+        new_line["_corrections"] = existing
+        lines[idx] = new_line
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Step 4: RAG helpers
 # ---------------------------------------------------------------------------
 
@@ -1764,6 +1851,7 @@ async def upload_script(file: UploadFile = File(...)):
             )
 
         parsed = await loop.run_in_executor(_executor, autocorrect_script, parsed)
+        parsed = await loop.run_in_executor(_executor, llm_cleanup_script, parsed)
 
         _parsed_script = parsed
         return parsed
