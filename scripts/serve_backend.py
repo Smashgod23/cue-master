@@ -874,9 +874,13 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if matched_char:
             flush_dialogue()
             current_character = matched_char
-            if extracted_stage:
-                # Emit even before first_dialogue_seen: a matched character cue
-                # already signals play body, same reasoning as flush_dialogue.
+            if extracted_stage and first_dialogue_seen:
+                # Gated on first_dialogue_seen so OCR-damaged cast-list
+                # entries (e.g. "MALCOLM to grandma]") can't leak into
+                # parsed output as in-script stage directions. Cost: the
+                # recovered direction on the very first cue of the play
+                # is dropped, which is a far smaller surface than
+                # front-matter leakage.
                 result.append({
                     "id": line_id,
                     "type": "stage_direction",
