@@ -215,7 +215,8 @@ async def cleanup(request: CleanupRequest):
         # present verbatim in the input or within edit distance 2 of some
         # input word (the letter-swap limit for OCR cleanup).
         import re as _re
-        in_tokens = _re.findall(r"[A-Za-z']+", trimmed.lower())
+        in_tokens_raw = _re.findall(r"[A-Za-z']+", trimmed)
+        in_tokens = [t.lower() for t in in_tokens_raw]
         out_tokens = _re.findall(r"[A-Za-z']+", fixed.lower())
         if abs(len(out_tokens) - len(in_tokens)) > 1:
             cleaned.append(raw_line)
@@ -251,12 +252,14 @@ async def cleanup(request: CleanupRequest):
                 # when that input word itself looks OCR-damaged. A clean
                 # word like "wears" being rewritten to "wore" (distance 3)
                 # should be rejected, but a garbled word like "ncvcf" being
-                # rewritten to "never" (distance 3) should pass.
-                nearest_iw, nearest_dist = min(
-                    ((iw, _lev.distance(w, iw)) for iw in in_tokens),
+                # rewritten to "never" (distance 3) should pass. Damage
+                # detection uses the original-case token so that mixed-case
+                # OCR artifacts ("cQllapses") are recognized.
+                nearest_idx, nearest_dist = min(
+                    enumerate(_lev.distance(w, iw) for iw in in_tokens),
                     key=lambda p: p[1],
                 )
-                budget = 3 if _is_damaged(nearest_iw) else 1
+                budget = 3 if _is_damaged(in_tokens_raw[nearest_idx]) else 1
                 if nearest_dist > budget:
                     reject = True
                     break

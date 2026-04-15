@@ -1251,8 +1251,26 @@ def llm_cleanup_script(lines: list[dict]) -> list[dict]:
             continue
         new_line = dict(lines[idx])
         new_line["text"] = fixed
+
+        # Emit one _corrections entry per changed word so the review UI can
+        # highlight and individually undo each LLM edit. The UI tokenizes on
+        # word boundaries and matches by lowercased word, so positional
+        # alignment only matters when word counts match.
+        orig_words = re.findall(r"[A-Za-z']+", original)
+        fixed_words = re.findall(r"[A-Za-z']+", fixed)
         existing = list(new_line.get("_corrections", []))
-        existing.append({"original": original, "corrected": fixed, "source": "llm"})
+        if len(orig_words) == len(fixed_words):
+            for ow, fw in zip(orig_words, fixed_words):
+                if ow.lower() != fw.lower():
+                    existing.append({"original": ow, "corrected": fw, "source": "llm"})
+        else:
+            # Word counts differ (rare; allowed within +/-1 by the guard).
+            # Diff the sets so each changed word is still individually
+            # highlightable in the review UI.
+            orig_set = {w.lower() for w in orig_words}
+            for fw in fixed_words:
+                if fw.lower() not in orig_set:
+                    existing.append({"original": fw, "corrected": fw, "source": "llm"})
         new_line["_corrections"] = existing
         lines[idx] = new_line
 
