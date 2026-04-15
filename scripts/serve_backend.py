@@ -615,12 +615,18 @@ def parse_script_text(raw_text: str) -> list[dict]:
                             tail_name = ' '.join(rest_words[1:])
                             if any(tail_name.startswith(c) for c in sorted_chars):
                                 continue  # skip this char_name, try next
-                    # Distinctive character names (>= 5 chars) rarely collide
-                    # with regular words, so accept even when the rest is
-                    # lowercase — this rescues cues from OCR-damaged lines
-                    # like "ALICE oul xvtn(loxv\\ He's been..." where the
-                    # stage direction brackets were destroyed.
-                    distinctive = len(char_name.replace(" ", "")) >= 5
+                    # Rescue cues from OCR-damaged lines like
+                    # "ALICE oul xvtn(loxv\\ He's been..." where the stage
+                    # direction brackets were destroyed. Only apply when the
+                    # name is distinctive (>= 5 chars) AND the rest contains
+                    # unmistakable OCR-damage markers — bracket/backslash/caret
+                    # characters that don't appear in regular prose. Plain
+                    # lowercase continuations like "MALCOLM enters quietly"
+                    # stay rejected so narrative prose isn't misread as a cue.
+                    distinctive = (
+                        len(char_name.replace(" ", "")) >= 5
+                        and bool(re.search(r'[\[\]\{\}\\^]', rest[:80]))
+                    )
                     if (has_delimiter or not rest or rest[0].isupper()
                             or distinctive or not after.strip()):
                         return char_name, rest, extracted_stage
@@ -868,7 +874,9 @@ def parse_script_text(raw_text: str) -> list[dict]:
         if matched_char:
             flush_dialogue()
             current_character = matched_char
-            if extracted_stage and first_dialogue_seen:
+            if extracted_stage:
+                # Emit even before first_dialogue_seen: a matched character cue
+                # already signals play body, same reasoning as flush_dialogue.
                 result.append({
                     "id": line_id,
                     "type": "stage_direction",
