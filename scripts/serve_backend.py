@@ -1438,14 +1438,22 @@ def llm_cleanup_script(lines: list[dict], max_lines: int = 120) -> list[dict]:
     3 minutes which is tolerable for the rare "whole-script upload" case.
     """
     suspicious: list[tuple[int, str]] = []
+    total_damaged = 0
     for idx, line in enumerate(lines):
         ltype = line.get("type")
         if ltype not in ("dialogue", "stage_direction"):
             continue
-        if _line_needs_llm_cleanup(line.get("text", "")):
+        if not _line_needs_llm_cleanup(line.get("text", "")):
+            continue
+        total_damaged += 1
+        if len(suspicious) < max_lines:
             suspicious.append((idx, line["text"]))
-        if len(suspicious) >= max_lines:
-            break
+
+    if total_damaged > max_lines:
+        print(
+            f"[llm_cleanup] capped at {max_lines}/{total_damaged} damaged lines; "
+            f"{total_damaged - max_lines} left uncleaned for manual review"
+        )
 
     if not suspicious:
         return lines
