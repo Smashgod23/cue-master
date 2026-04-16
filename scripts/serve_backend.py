@@ -1181,16 +1181,20 @@ DIRECTOR_URL = os.environ.get("DIRECTOR_URL", "http://127.0.0.1:8001")
 
 def _line_needs_llm_cleanup(text: str) -> bool:
     """
-    Flag dialogue lines that the spellchecker couldn't fully fix.
+    Return True when a line is likely OCR-damaged in a way the spellchecker
+    can't fix. Covers dialogue AND stage directions; most stage directions
+    in scanned scripts have the same damage profile as dialogue.
+
     Signals we trust:
-    - Any word with an internal uppercase letter surrounded by lowercase
-      (e.g. "soTcosm", "Hcllm", "Thcrc'Il" — classic OCR case corruption).
-    - Token with no vowel and length >= 4 (e.g. "hcfc", "fsts", "ncvcf").
-    - Tokens containing digits adjacent to letters (e.g. "sa4y").
-    - Stray OCR-junk characters (\\, ^, |) embedded in prose.
-    - Multiple short non-word tokens in a row (e.g. "IL go", " im the").
-    - Partial / broken honorific: "p" or "wp" stranded alone after a verb
-      suggests the OCR dropped a letter ("gets up" -> 'gels "p').
+    - Stray junk characters (\\, ^, |) embedded inside prose.
+    - Any word with internal case flips (a lowercase letter with an
+      uppercase letter next to it surrounded by lowercase) — "soTcosm",
+      "SOrrY", "Thcrc'Il".
+    - Vowel-less word of length >= 4 ("hcfc", "fsts", "ncvcf").
+    - Letters mixed with digits ("sa4y", "im5", "had5").
+    - Stray quote-before-letter ('"p', '"t') — classic misread of "u".
+    - "Im" on its own (should be "I'm"), "&" in running prose (OCR of "and"),
+      and other well-known OCR signatures scans routinely produce.
     """
     if not text or len(text) < 6:
         return False
@@ -1199,13 +1203,22 @@ def _line_needs_llm_cleanup(text: str) -> bool:
     for token in re.findall(r"[A-Za-z][A-Za-z']{2,}", text):
         if re.search(r'[a-z][A-Z][a-z]', token):
             return True
+        if re.search(r'[A-Z]{2,}[a-z]', token) and not token.isupper():
+            # "SOrrY", "ALicn", "FEATHHRSTONE" — run-of-caps followed by
+            # lowercase inside a mixed-case token is almost always OCR damage.
+            return True
         if len(token) >= 4 and not re.search(r'[aeiouyAEIOUY]', token):
             return True
     if re.search(r'[a-zA-Z]\d[a-zA-Z]|[a-zA-Z]{2,}\d|\d[a-zA-Z]{2,}', text):
         return True
-    # Stray quote-followed-by-letter ("p, "p, "t) is a classic artifact of
-    # OCR mis-reading the letter "u".
     if re.search(r'"\s?[a-z](?:\b|[A-Za-z])', text):
+        return True
+    # "Im " at start or after space (should be "I'm"). Restrict to this
+    # exact token so we don't flag every "I'm" / "I am" scanned correctly.
+    if re.search(r'(?:^|\s)Im\s', text):
+        return True
+    # "&" inside running prose almost always means OCR mis-read "and".
+    if " & " in text:
         return True
     return False
 
@@ -1413,19 +1426,26 @@ def llm_reclassify_lines(lines: list[dict]) -> list[dict]:
     return out
 
 
-def llm_cleanup_script(lines: list[dict]) -> list[dict]:
+def llm_cleanup_script(lines: list[dict], max_lines: int = 120) -> list[dict]:
     """
-    Send lines flagged as OCR-damaged to the local Phi-3 director model
-    for letter-level cleanup. Everything runs on-device; no API calls,
-    no cost, no rate limits. Falls back to the original text if the
-    director is unreachable or a request fails.
+    Send lines flagged as OCR-damaged to the local base Phi-3 model for
+    letter-level cleanup. Runs on both dialogue and stage directions —
+    scanned stage directions are usually worse than dialogue because they
+    tend to use italic faces that trip OCR. Everything runs on-device.
+
+    Caps the request at `max_lines` to keep upload latency bounded; on a
+    16 GB M1 Pro the base model takes ~1.5 s per line, so 120 lines ≈
+    3 minutes which is tolerable for the rare "whole-script upload" case.
     """
     suspicious: list[tuple[int, str]] = []
     for idx, line in enumerate(lines):
-        if line.get("type") != "dialogue":
+        ltype = line.get("type")
+        if ltype not in ("dialogue", "stage_direction"):
             continue
         if _line_needs_llm_cleanup(line.get("text", "")):
             suspicious.append((idx, line["text"]))
+        if len(suspicious) >= max_lines:
+            break
 
     if not suspicious:
         return lines
