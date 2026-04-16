@@ -1188,6 +1188,9 @@ def _line_needs_llm_cleanup(text: str) -> bool:
     - Token with no vowel and length >= 4 (e.g. "hcfc", "fsts", "ncvcf").
     - Tokens containing digits adjacent to letters (e.g. "sa4y").
     - Stray OCR-junk characters (\\, ^, |) embedded in prose.
+    - Multiple short non-word tokens in a row (e.g. "IL go", " im the").
+    - Partial / broken honorific: "p" or "wp" stranded alone after a verb
+      suggests the OCR dropped a letter ("gets up" -> 'gels "p').
     """
     if not text or len(text) < 6:
         return False
@@ -1200,7 +1203,214 @@ def _line_needs_llm_cleanup(text: str) -> bool:
             return True
     if re.search(r'[a-zA-Z]\d[a-zA-Z]|[a-zA-Z]{2,}\d|\d[a-zA-Z]{2,}', text):
         return True
+    # Stray quote-followed-by-letter ("p, "p, "t) is a classic artifact of
+    # OCR mis-reading the letter "u".
+    if re.search(r'"\s?[a-z](?:\b|[A-Za-z])', text):
+        return True
     return False
+
+
+def _line_looks_like_stage_direction(text: str) -> bool:
+    """
+    A cheap heuristic that decides whether a dialogue line is *probably*
+    actually a stage direction whose opening bracket was eaten by OCR.
+    Signals:
+    - Starts with a bracket-like character (including junk like [, (, {, ^, \\).
+    - Short lowercase-start phrase followed by ']' or ')' within first 40 chars
+      (mangled closer after a stripped opener).
+    - Entire line is an all-lowercase description of movement/sound.
+    """
+    if not text:
+        return False
+    stripped = text.lstrip()
+    if not stripped:
+        return False
+    if stripped[0] in "[({\\^":
+        return True
+    # "smiling]. Don't worry, dear." — closer appears before a period in a
+    # context that doesn't have a matching opener.
+    head = stripped[:60]
+    if re.search(r'^[a-z][^\[\(\{]{0,40}[\]\)\}]', head):
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# LLM line-type classifier (base Phi-3)
+# ---------------------------------------------------------------------------
+
+def _call_classifier(texts: list[str], timeout_floor: int = 12) -> list[str] | None:
+    """POST a batch to /api/director/classify. Returns None on network failure."""
+    if not texts:
+        return []
+    try:
+        import urllib.request
+        import urllib.error
+
+        payload = json.dumps({"lines": texts}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{DIRECTOR_URL}/api/director/classify",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        # Classification is 1 token per line so it's fast, but base model
+        # load on first call takes ~15s.
+        timeout = min(600, timeout_floor + 3 * len(texts) + 20)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        labels = data.get("labels", [])
+        if len(labels) != len(texts):
+            print(f"[classify] size mismatch {len(labels)} vs {len(texts)}; skipping")
+            return None
+        return labels
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as exc:
+        print(f"[classify] director unreachable ({exc}); skipping")
+        return None
+
+
+def llm_reclassify_lines(lines: list[dict]) -> list[dict]:
+    """
+    Ask the LLM to reclassify lines whose type is ambiguous, then split
+    MIXED lines so the embedded stage direction becomes its own entry.
+
+    We only send the LLM lines where the regex parser made a suspicious
+    call — sending all 400+ lines of a script would be slow. The classifier
+    fixes two common failure modes:
+      1. Stage direction misread as dialogue (OCR ate the opening bracket,
+         so the text attached to the previous character cue).
+      2. Dialogue misread as stage direction (junk characters made an
+         actual line of dialogue look bracketed).
+    """
+    # Pick candidates cheaply: anything whose heuristics suggest the parser
+    # might have been wrong. We still run the LLM on each one.
+    candidates: list[tuple[int, str, str]] = []  # (idx, text, original_type)
+    for idx, line in enumerate(lines):
+        text = line.get("text", "") or ""
+        ltype = line.get("type")
+        if ltype == "dialogue":
+            if _line_looks_like_stage_direction(text) or _line_needs_llm_cleanup(text):
+                candidates.append((idx, text, "dialogue"))
+        elif ltype == "stage_direction":
+            # Short stage directions that read like spoken prose — the
+            # classifier can confirm or overturn the regex call.
+            if 12 <= len(text) <= 220 and not re.match(r'^[\[\(\{]', text):
+                candidates.append((idx, text, "stage_direction"))
+
+    if not candidates:
+        return lines
+
+    labels = _call_classifier([c[1] for c in candidates])
+    if labels is None:
+        return lines
+
+    # Build the rewritten list incrementally so we can split MIXED lines
+    # into two entries (stage direction + dialogue) at the correct place.
+    out: list[dict] = []
+    label_by_idx = {candidates[i][0]: labels[i] for i in range(len(candidates))}
+    next_id = max((l.get("id", 0) for l in lines), default=0) + 1
+
+    for idx, line in enumerate(lines):
+        label = label_by_idx.get(idx)
+        if label is None:
+            out.append(line)
+            continue
+
+        original_type = line["type"]
+        text = line["text"]
+
+        # Same classification — keep the original line unchanged.
+        if (label == "dialogue" and original_type == "dialogue") or \
+           (label == "stage_direction" and original_type == "stage_direction"):
+            out.append(line)
+            continue
+
+        # LLM says this dialogue line is actually a full stage direction.
+        if label == "stage_direction" and original_type == "dialogue":
+            new_line = dict(line)
+            new_line["type"] = "stage_direction"
+            # Strip the leading bracket garbage that fooled the regex.
+            new_line["text"] = re.sub(r'^[\[\(\{\\\^\s]+', '', text).rstrip()
+            new_line["character"] = ""
+            out.append(new_line)
+            continue
+
+        # LLM says this stage direction is really dialogue.
+        if label == "dialogue" and original_type == "stage_direction":
+            # Only flip if we know which character should own it — otherwise
+            # leave as a stage direction (a dialogue line without a speaker
+            # is worse than a mislabeled action beat).
+            prev_char = next(
+                (l.get("character") for l in reversed(out)
+                 if l.get("type") == "dialogue" and l.get("character")),
+                None,
+            )
+            if prev_char:
+                new_line = dict(line)
+                new_line["type"] = "dialogue"
+                new_line["character"] = prev_char
+                out.append(new_line)
+            else:
+                out.append(line)
+            continue
+
+        # MIXED: split into a stage direction then a dialogue line. Best
+        # split point is the first ']' or ')' — real scripts almost always
+        # put the direction in brackets. Fall back to the first period
+        # when the closer is missing.
+        if label == "mixed":
+            m = re.search(r'[\]\)\}]', text)
+            if m:
+                stage_part = text[:m.end()].strip(" \t[](){}\\^.,;:")
+                rest_part = text[m.end():].strip(" \t.:,;-_")
+            else:
+                # No closer — split at the first sentence-ending period that
+                # is followed by a capital letter.
+                m2 = re.search(r'\.(\s+)(?=[A-Z])', text)
+                if m2:
+                    stage_part = text[:m2.start()].strip(" \t[](){}\\^.,;:")
+                    rest_part = text[m2.end():].strip()
+                else:
+                    out.append(line)
+                    continue
+
+            # Emit the stage direction (if non-empty)
+            if stage_part and len(stage_part) >= 3:
+                out.append({
+                    "id": next_id,
+                    "type": "stage_direction",
+                    "character": "",
+                    "text": stage_part,
+                })
+                next_id += 1
+
+            # Emit the residual dialogue under the original speaker.
+            if rest_part and len(rest_part) >= 3:
+                dialogue_line = dict(line)
+                dialogue_line["id"] = next_id
+                dialogue_line["text"] = rest_part
+                # Keep the original character if the parser had one; when
+                # the original was a stage_direction with no speaker, try
+                # to borrow the previous speaker.
+                if not dialogue_line.get("character"):
+                    prev_char = next(
+                        (l.get("character") for l in reversed(out)
+                         if l.get("type") == "dialogue" and l.get("character")),
+                        None,
+                    )
+                    if prev_char:
+                        dialogue_line["character"] = prev_char
+                out.append(dialogue_line)
+                next_id += 1
+            continue
+
+        # Unknown label — keep original.
+        out.append(line)
+
+    # Re-number IDs densely so the frontend always sees 1..N without gaps.
+    for new_id, line in enumerate(out, start=1):
+        line["id"] = new_id
+    return out
 
 
 def llm_cleanup_script(lines: list[dict]) -> list[dict]:
@@ -1250,22 +1460,31 @@ def llm_cleanup_script(lines: list[dict]) -> list[dict]:
         if not fixed or fixed == original:
             continue
 
-        # Only apply the cleanup when we can map every change to a per-word
-        # correction the review UI can highlight and revert. If the model
-        # inserted or removed a word we can't pair tokens reliably, so the
-        # change would be invisible and non-undoable in ScriptReview --
-        # skip it and leave the original OCR text for manual editing.
         orig_words = re.findall(r"[A-Za-z']+", original)
         fixed_words = re.findall(r"[A-Za-z']+", fixed)
-        if len(orig_words) != len(fixed_words):
-            continue
 
         new_line = dict(lines[idx])
         new_line["text"] = fixed
         existing = list(new_line.get("_corrections", []))
-        for ow, fw in zip(orig_words, fixed_words):
-            if ow.lower() != fw.lower():
-                existing.append({"original": ow, "corrected": fw, "source": "llm"})
+
+        if len(orig_words) == len(fixed_words):
+            # Same word count → pair up tokens so the ScriptReview UI can
+            # highlight each changed word and let the user undo individually.
+            for ow, fw in zip(orig_words, fixed_words):
+                if ow.lower() != fw.lower():
+                    existing.append({"original": ow, "corrected": fw, "source": "llm"})
+        else:
+            # Word count differs (e.g. LLM inserted an apostrophe that split
+            # a token, or merged two fragments back together). We still want
+            # the cleanup, but we can't produce per-word diffs — record one
+            # sentence-level correction the UI can show + revert wholesale.
+            existing.append({
+                "original": original,
+                "corrected": fixed,
+                "source": "llm",
+                "scope": "line",
+            })
+
         new_line["_corrections"] = existing
         lines[idx] = new_line
 
@@ -1864,6 +2083,11 @@ async def upload_script(file: UploadFile = File(...)):
             )
 
         parsed = await loop.run_in_executor(_executor, autocorrect_script, parsed)
+        # Reclassify lines before cleanup: splitting out an embedded stage
+        # direction first means cleanup only sees real dialogue prose, so
+        # OCR letter fixes don't waste effort on a line we're about to
+        # relabel anyway.
+        parsed = await loop.run_in_executor(_executor, llm_reclassify_lines, parsed)
         parsed = await loop.run_in_executor(_executor, llm_cleanup_script, parsed)
 
         _parsed_script = parsed
