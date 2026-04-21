@@ -320,9 +320,9 @@ def extract_text_from_pdf(file_path: str) -> str:
     """
     Extract text from a PDF per page.
     - Text-based pages: pdfplumber (instant, lossless).
-    - Scanned pages (no embedded text): PaddleOCR on rendered image.
+    - Scanned pages (no embedded text): EasyOCR on rendered image.
     - Pages with an embedded but corrupted OCR layer: detected via vowel-ratio
-      heuristic, then re-OCR'd with PaddleOCR for better accuracy.
+      heuristic, then re-OCR'd with EasyOCR for better accuracy.
     """
     import pdfplumber
 
@@ -1687,8 +1687,12 @@ def _transcribe(pcm_bytes: bytes) -> dict:
     db = round(20 * math.log10(rms + 1e-9), 1)
 
     model = _get_whisper()
+    # beam_size=5 matches faster-whisper's default; beam_size=1 was visibly
+    # worse on multi-word Shakespeare lines. vad_filter is off because Silero
+    # VAD already gates this buffer — running Whisper's internal VAD on top
+    # clipped soft onsets and shortened short words to empty strings.
     segments, _ = model.transcribe(
-        samples, language="en", beam_size=1, vad_filter=True
+        samples, language="en", beam_size=5, vad_filter=False
     )
     text = " ".join(seg.text for seg in segments).strip()
 
@@ -1800,8 +1804,10 @@ class RehearsalSession:
         self.current_idx += 1
 
 
-# How many consecutive 300 ms chunks of silence end a speech segment (~600 ms)
-_SILENCE_THRESHOLD = 2
+# How many consecutive 300 ms chunks of silence end a speech segment (~1.2 s).
+# 600 ms (threshold=2) cut off any dramatic pause inside a line and split it
+# into two separate transcription attempts against the same expected text.
+_SILENCE_THRESHOLD = 4
 # Minimum speech buffer length before we bother transcribing (300 ms worth of bytes)
 _MIN_SPEECH_BYTES = _SAMPLE_RATE * 2 * 0.3  # 9600 bytes
 
@@ -1911,7 +1917,7 @@ async def _apply_director(ws: WebSocket, session: RehearsalSession, result: dict
         context_str = "\n".join(context_chunks)
 
         prompt_input = (
-            f"Actor said: '{spoken}' | Expected: '{expected[:100]}' | "
+            f"Actor said: '{spoken}' | Expected: '{expected}' | "
             f"Pacing: {wpm} WPM | Volume: {volume} dB"
         )
 

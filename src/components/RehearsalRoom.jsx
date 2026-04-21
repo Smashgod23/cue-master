@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import ScriptView from "./ScriptView";
 import ControlPanel from "./ControlPanel";
@@ -88,6 +88,22 @@ export default function RehearsalRoom() {
 
   // --- WebSocket ---
   const ws = useRehearsalSocket();
+  const { connected: wsConnected, connect: wsConnect, disconnect: wsDisconnect } = ws;
+
+  // The backend session's mode is set once, at `init` time. Toggling the UI
+  // switch mid-rehearsal used to silently leave the backend on the original
+  // mode. Restart the socket so the new mode is sent on the next `init`.
+  const firstModeRender = useRef(true);
+  useEffect(() => {
+    if (firstModeRender.current) {
+      firstModeRender.current = false;
+      return;
+    }
+    if (!wsConnected) return;
+    wsDisconnect();
+    const timer = setTimeout(() => wsConnect(mode, userCharKey), 300);
+    return () => clearTimeout(timer);
+  }, [mode, userCharKey, wsConnected, wsConnect, wsDisconnect]);
 
   return (
     <div className="h-screen flex flex-col bg-parchment">

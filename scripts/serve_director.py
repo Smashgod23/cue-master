@@ -188,8 +188,11 @@ def parse_director_response(raw: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Fallback: return a Continue with the raw text as feedback
-    return {"Action": "Continue", "Feedback": raw[:200] if raw else "No feedback generated."}
+    # Unparseable — log the raw output so we can tell a real "Continue" apart
+    # from a model that failed to emit JSON, and return an empty feedback so
+    # _apply_director won't surface garbage to the user.
+    print(f"[director] JSON parse failed; raw output (first 300 chars): {raw[:300]!r}")
+    return {"Action": "Continue", "Feedback": "", "_parse_failed": True}
 
 
 @app.get("/api/director/health")
@@ -383,15 +386,22 @@ async def classify(request: ClassifyRequest):
 async def evaluate(request: DirectorRequest):
     """Evaluate an actor's line delivery and return director feedback."""
     from mlx_lm import generate
+    from mlx_lm.sample_utils import make_sampler
 
     prompt = build_prompt(request.input, request.context)
 
+    # Pin greedy sampling so director feedback is reproducible run-to-run.
+    # mlx-lm's default sampler has changed across versions; relying on it
+    # made "same input, different feedback" possible for no good reason.
     start = time.time()
     raw_response = generate(
         _model,
         _tokenizer,
         prompt=prompt,
-        max_tokens=150,
+        # 150 truncated multi-sentence feedback mid-string, which broke the
+        # JSON envelope and silently fell back to an empty Continue.
+        max_tokens=256,
+        sampler=make_sampler(temp=0.0),
         verbose=False,
     )
     elapsed = time.time() - start
@@ -404,7 +414,7 @@ async def evaluate(request: DirectorRequest):
 
     print(f"  [{elapsed:.2f}s] {result['Action']}: {result['Feedback'][:80]}...")
 
-    return DirectorResponse(**result)
+    return DirectorResponse(Action=result["Action"], Feedback=result.get("Feedback", ""))
 
 
 def main():
