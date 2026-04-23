@@ -108,13 +108,37 @@ export default function RehearsalRoom() {
   // side changes. Crucially this effect does NOT return a cleanup function:
   // if it did, React would clear the reconnect timer when wsDisconnect
   // flipped wsConnected and re-ran the effect, cancelling the reconnect.
+  // The reconcileTimerRef is cleared explicitly by stopRehearsal if the
+  // user ends the session during the 300ms reconnect window.
+  const reconcileTimerRef = useRef(null);
   useEffect(() => {
     if (!wsConnected) return;
     if (committedModeRef.current === null) return;
     if (mode === committedModeRef.current && userCharKey === committedCharRef.current) return;
     wsDisconnect();
-    setTimeout(() => wrappedConnect(mode, userCharKey), 300);
+    if (reconcileTimerRef.current) clearTimeout(reconcileTimerRef.current);
+    reconcileTimerRef.current = setTimeout(() => {
+      reconcileTimerRef.current = null;
+      wrappedConnect(mode, userCharKey);
+    }, 300);
   }, [mode, userCharKey, wsConnected, wsDisconnect, wrappedConnect]);
+
+  // Wraps ws.disconnect so the reconciliation reconnect can't reopen a
+  // session the user just explicitly ended.
+  const stopRehearsal = useCallback(() => {
+    if (reconcileTimerRef.current) {
+      clearTimeout(reconcileTimerRef.current);
+      reconcileTimerRef.current = null;
+    }
+    committedModeRef.current = null;
+    committedCharRef.current = null;
+    wsDisconnect();
+  }, [wsDisconnect]);
+
+  // Clear any pending reconnect on unmount too.
+  useEffect(() => () => {
+    if (reconcileTimerRef.current) clearTimeout(reconcileTimerRef.current);
+  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-parchment">
@@ -247,8 +271,8 @@ export default function RehearsalRoom() {
             connected={ws.connected}
             micError={ws.micError}
             onConnect={() => wrappedConnect(mode, userCharKey)}
-            onDisconnect={ws.disconnect}
-            onRestart={() => { ws.disconnect(); setTimeout(() => wrappedConnect(mode, userCharKey), 300); }}
+            onDisconnect={stopRehearsal}
+            onRestart={() => { stopRehearsal(); setTimeout(() => wrappedConnect(mode, userCharKey), 300); }}
             userCharName={userCharInfo?.name}
             userCharColor={userCharInfo?.color}
             onOpenNotes={() => {
