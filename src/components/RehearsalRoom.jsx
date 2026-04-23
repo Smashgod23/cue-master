@@ -79,13 +79,10 @@ export default function RehearsalRoom() {
   });
 
   const toggleMode = () => {
-    setMode((prev) => {
-      const next = prev === "learning" ? "performance" : "learning";
-      // Only restart if we're mid-rehearsal; otherwise the Begin Rehearsal
-      // click will pick up the new mode normally.
-      if (wsConnectedRef.current) restartSession(next, userCharKey);
-      return next;
-    });
+    setMode((prev) => prev === "learning" ? "performance" : "learning");
+    // Reconciliation happens in a useEffect below, so handshake-window
+    // toggles (clicking Begin then flipping mode before the socket opens)
+    // are caught once wsConnected turns true.
   };
 
   // --- UI state ---
@@ -96,19 +93,28 @@ export default function RehearsalRoom() {
   const ws = useRehearsalSocket();
   const { connected: wsConnected, connect: wsConnect, disconnect: wsDisconnect } = ws;
 
-  // Restart the WebSocket session. Kept as a plain callback (not a useEffect
-  // return-cleanup) so React can't cancel the reconnect timer when the
-  // intervening wsDisconnect() flips wsConnected and re-renders.
-  const wsConnectedRef = useRef(wsConnected);
-  useEffect(() => { wsConnectedRef.current = wsConnected; }, [wsConnected]);
-  const restartSession = useCallback((m, c) => {
-    if (wsConnectedRef.current) {
-      wsDisconnect();
-      setTimeout(() => wsConnect(m, c), 300);
-    } else {
-      wsConnect(m, c);
-    }
-  }, [wsConnect, wsDisconnect]);
+  // Track which (mode, character) the backend was last told via `init`.
+  // wrappedConnect updates these refs so the reconciliation effect below
+  // can detect a drift between the UI and the backend session.
+  const committedModeRef = useRef(null);
+  const committedCharRef = useRef(null);
+  const wrappedConnect = useCallback((m, c) => {
+    committedModeRef.current = m;
+    committedCharRef.current = c;
+    wsConnect(m, c);
+  }, [wsConnect]);
+
+  // Reconcile UI mode/character with backend session. Runs whenever either
+  // side changes. Crucially this effect does NOT return a cleanup function:
+  // if it did, React would clear the reconnect timer when wsDisconnect
+  // flipped wsConnected and re-ran the effect, cancelling the reconnect.
+  useEffect(() => {
+    if (!wsConnected) return;
+    if (committedModeRef.current === null) return;
+    if (mode === committedModeRef.current && userCharKey === committedCharRef.current) return;
+    wsDisconnect();
+    setTimeout(() => wrappedConnect(mode, userCharKey), 300);
+  }, [mode, userCharKey, wsConnected, wsDisconnect, wrappedConnect]);
 
   return (
     <div className="h-screen flex flex-col bg-parchment">
@@ -240,9 +246,9 @@ export default function RehearsalRoom() {
             liveState={ws.status}
             connected={ws.connected}
             micError={ws.micError}
-            onConnect={() => ws.connect(mode, userCharKey)}
+            onConnect={() => wrappedConnect(mode, userCharKey)}
             onDisconnect={ws.disconnect}
-            onRestart={() => restartSession(mode, userCharKey)}
+            onRestart={() => { ws.disconnect(); setTimeout(() => wrappedConnect(mode, userCharKey), 300); }}
             userCharName={userCharInfo?.name}
             userCharColor={userCharInfo?.color}
             onOpenNotes={() => {
