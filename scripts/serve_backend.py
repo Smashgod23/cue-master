@@ -2020,6 +2020,10 @@ async def ws_rehearsal(websocket: WebSocket):
                     mode = data.get("mode", "learning")
                     # Normalise to ALL CAPS to match parsed script character names
                     character = data.get("character", "OBERON").upper().strip()
+                    # Reset per-session voice map so characters are assigned voices
+                    # in the order they appear in this script, not by accumulated
+                    # state from prior sessions on the same process.
+                    _VOICE_ASSIGNMENTS.clear()
                     session = RehearsalSession(
                         mode=mode,
                         character=character,
