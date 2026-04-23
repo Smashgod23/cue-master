@@ -92,18 +92,22 @@ export default function RehearsalRoom() {
 
   // The backend session's mode is set once, at `init` time. Toggling the UI
   // switch mid-rehearsal used to silently leave the backend on the original
-  // mode. Restart the socket so the new mode is sent on the next `init`.
+  // mode, so we restart the socket on mode/character change. wsConnected is
+  // intentionally NOT a dependency: including it caused the effect to fire
+  // the instant a new connection succeeded, disconnecting it immediately.
   const firstModeRender = useRef(true);
+  const wsConnectedRef = useRef(wsConnected);
+  useEffect(() => { wsConnectedRef.current = wsConnected; }, [wsConnected]);
   useEffect(() => {
     if (firstModeRender.current) {
       firstModeRender.current = false;
       return;
     }
-    if (!wsConnected) return;
+    if (!wsConnectedRef.current) return;
     wsDisconnect();
     const timer = setTimeout(() => wsConnect(mode, userCharKey), 300);
     return () => clearTimeout(timer);
-  }, [mode, userCharKey, wsConnected, wsConnect, wsDisconnect]);
+  }, [mode, userCharKey, wsConnect, wsDisconnect]);
 
   return (
     <div className="h-screen flex flex-col bg-parchment">
@@ -165,6 +169,35 @@ export default function RehearsalRoom() {
           <Link to="/upload" className="font-sans text-xs font-medium text-gold-deep underline underline-offset-2 no-underline hover:text-gold">
             Upload script
           </Link>
+        </div>
+      )}
+
+      {/* Live caption bar — shows what Whisper heard you say */}
+      {ws.connected && (
+        <div className="border-b border-parchment-deep bg-ink text-parchment px-6 py-2.5 flex items-center gap-3">
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+            ws.status === "listening" ? "bg-gold animate-pulse"
+            : ws.status === "analyzing" ? "bg-gold"
+            : ws.status === "speaking" ? "bg-crimson"
+            : "bg-warmgray"
+          }`} />
+          <span className="font-sans text-[10px] uppercase tracking-widest text-warmgray-light flex-shrink-0">
+            {ws.status === "speaking" ? "Scene partner" :
+             ws.status === "analyzing" ? "Analyzing" :
+             ws.status === "listening" ? "Listening" : "Idle"}
+          </span>
+          <span className="flex-1 font-body text-sm text-parchment italic truncate">
+            {ws.transcript?.text
+              ? `"${ws.transcript.text}"`
+              : ws.status === "listening"
+                ? "Speak your line — I'll show you what I hear."
+                : ""}
+          </span>
+          {ws.transcript?.wpm != null && (
+            <span className="font-sans text-[10px] text-warmgray-light flex-shrink-0">
+              {ws.transcript.wpm} wpm
+            </span>
+          )}
         </div>
       )}
 

@@ -1719,11 +1719,36 @@ def _raw_pcm_to_wav(pcm: bytes, sample_rate: int, channels: int, bits: int) -> b
     return header + pcm
 
 
-def _tts(text: str) -> bytes:
+# Rotate through several natural-sounding macOS voices so each scene partner
+# has a distinct voice instead of every character sounding identical. Order
+# matters: voices earlier in the list get assigned to characters that appear
+# earlier in the script. All of these ship with macOS — no downloads required.
+_VOICE_POOL = ["Samantha", "Daniel", "Karen", "Moira", "Fiona", "Tom", "Allison", "Serena"]
+_VOICE_ASSIGNMENTS: dict[str, str] = {}
+
+
+def _voice_for_character(character: str) -> str:
+    """Deterministically assign a voice to a character, caching the choice."""
+    if not character:
+        return _VOICE_POOL[0]
+    key = character.upper().strip()
+    if key not in _VOICE_ASSIGNMENTS:
+        idx = len(_VOICE_ASSIGNMENTS) % len(_VOICE_POOL)
+        _VOICE_ASSIGNMENTS[key] = _VOICE_POOL[idx]
+    return _VOICE_ASSIGNMENTS[key]
+
+
+def _tts(text: str, character: str = "") -> bytes:
     """
     Synthesize text using macOS built-in TTS (say + afconvert) and return WAV bytes.
-    Intended to run in a thread executor.
+    Uses a distinct voice per character and a slightly slower rate for theatrical
+    delivery. Intended to run in a thread executor.
     """
+    voice = _voice_for_character(character)
+    # 180 wpm is a touch slower than say's default (~200) — noticeably more
+    # deliberate for verse/drama without dragging.
+    rate = "180"
+
     aiff_path = None
     wav_path = None
     try:
@@ -1732,7 +1757,7 @@ def _tts(text: str) -> bytes:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             wav_path = f.name
         subprocess.run(
-            ["say", "-v", "Alex", text, "-o", aiff_path],
+            ["say", "-v", voice, "-r", rate, text, "-o", aiff_path],
             check=True, capture_output=True, timeout=30,
         )
         subprocess.run(
@@ -1836,7 +1861,9 @@ async def _cue_next(ws: WebSocket, session: RehearsalSession, loop):
         await ws.send_text(json.dumps({"event": "advance_line", "lineId": line["id"]}))
         await ws.send_text(json.dumps({"event": "status", "state": "speaking"}))
         try:
-            wav_bytes = await loop.run_in_executor(_executor, _tts, line["text"])
+            wav_bytes = await loop.run_in_executor(
+                _executor, _tts, line["text"], line.get("character", "")
+            )
             session.audio_done.clear()
             await ws.send_bytes(wav_bytes)
             # Wait for client to signal playback complete; fall back after generous timeout

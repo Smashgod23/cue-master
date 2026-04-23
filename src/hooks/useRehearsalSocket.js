@@ -22,6 +22,7 @@ export default function useRehearsalSocket() {
   const [activeLine, setActiveLine] = useState(1);
   const [connected, setConnected] = useState(false);
   const [micError, setMicError] = useState(null);
+  const [transcript, setTranscript] = useState(null); // { text, wpm, volume, at }
 
   // ------------------------------------------------------------------
   // Incoming message handler
@@ -55,7 +56,14 @@ export default function useRehearsalSocket() {
           setActiveLine(msg.lineId);
           break;
         case "transcription":
-          // Backend drives all state changes; nothing extra needed here
+          if (msg.text && msg.text.trim()) {
+            setTranscript({
+              text: msg.text,
+              wpm: msg.wpm ?? null,
+              volume: msg.volume ?? null,
+              at: Date.now(),
+            });
+          }
           break;
         default:
           break;
@@ -136,6 +144,7 @@ export default function useRehearsalSocket() {
         setConnected(true);
         setStatus("listening");
         setNotes([]);         // clear notes from any previous session
+        setTranscript(null);  // clear captions from previous session
         setMicError(null);
         // Tell the backend which mode and character we're using
         ws.send(JSON.stringify({ event: "init", mode, character }));
@@ -183,7 +192,7 @@ export default function useRehearsalSocket() {
     };
   }, [stopMicCapture]);
 
-  return { status, notes, activeLine, connected, micError, connect, disconnect };
+  return { status, notes, activeLine, connected, micError, transcript, connect, disconnect };
 }
 
 // ---------------------------------------------------------------------------
