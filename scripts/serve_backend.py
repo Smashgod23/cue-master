@@ -1724,27 +1724,32 @@ def _raw_pcm_to_wav(pcm: bytes, sample_rate: int, channels: int, bits: int) -> b
 # matters: voices earlier in the list get assigned to characters that appear
 # earlier in the script. All of these ship with macOS — no downloads required.
 _VOICE_POOL = ["Samantha", "Daniel", "Karen", "Moira", "Fiona", "Tom", "Allison", "Serena"]
-_VOICE_ASSIGNMENTS: dict[str, str] = {}
 
 
-def _voice_for_character(character: str) -> str:
-    """Deterministically assign a voice to a character, caching the choice."""
+def _voice_for_character(character: str, voice_map: dict) -> str:
+    """
+    Deterministically assign a voice to a character, caching the choice in the
+    caller-provided map. The map lives on the per-session state so concurrent
+    rehearsal sessions don't stomp on each other's voice assignments.
+    """
     if not character:
         return _VOICE_POOL[0]
     key = character.upper().strip()
-    if key not in _VOICE_ASSIGNMENTS:
-        idx = len(_VOICE_ASSIGNMENTS) % len(_VOICE_POOL)
-        _VOICE_ASSIGNMENTS[key] = _VOICE_POOL[idx]
-    return _VOICE_ASSIGNMENTS[key]
+    if key not in voice_map:
+        idx = len(voice_map) % len(_VOICE_POOL)
+        voice_map[key] = _VOICE_POOL[idx]
+    return voice_map[key]
 
 
-def _tts(text: str, character: str = "") -> bytes:
+def _tts(text: str, character: str = "", voice_map: Optional[dict] = None) -> bytes:
     """
     Synthesize text using macOS built-in TTS (say + afconvert) and return WAV bytes.
     Uses a distinct voice per character and a slightly slower rate for theatrical
     delivery. Intended to run in a thread executor.
     """
-    voice = _voice_for_character(character)
+    if voice_map is None:
+        voice_map = {}
+    voice = _voice_for_character(character, voice_map)
     # 180 wpm is a touch slower than say's default (~200) — noticeably more
     # deliberate for verse/drama without dragging.
     rate = "180"
@@ -1819,6 +1824,10 @@ class RehearsalSession:
     is_speech_active: bool = False
     # Set by client when audio playback finishes so _cue_next doesn't guess timing
     audio_done: asyncio.Event = field(default_factory=asyncio.Event)
+    # Per-session map of character → assigned macOS voice. Populated lazily by
+    # _voice_for_character. Lives on the session so concurrent rehearsals don't
+    # share state.
+    voice_map: dict = field(default_factory=dict)
 
     def current_line(self) -> Optional[dict]:
         if 0 <= self.current_idx < len(self.dialogue_lines):
@@ -1862,7 +1871,7 @@ async def _cue_next(ws: WebSocket, session: RehearsalSession, loop):
         await ws.send_text(json.dumps({"event": "status", "state": "speaking"}))
         try:
             wav_bytes = await loop.run_in_executor(
-                _executor, _tts, line["text"], line.get("character", "")
+                _executor, _tts, line["text"], line.get("character", ""), session.voice_map
             )
             session.audio_done.clear()
             await ws.send_bytes(wav_bytes)
@@ -2020,10 +2029,6 @@ async def ws_rehearsal(websocket: WebSocket):
                     mode = data.get("mode", "learning")
                     # Normalise to ALL CAPS to match parsed script character names
                     character = data.get("character", "OBERON").upper().strip()
-                    # Reset per-session voice map so characters are assigned voices
-                    # in the order they appear in this script, not by accumulated
-                    # state from prior sessions on the same process.
-                    _VOICE_ASSIGNMENTS.clear()
                     session = RehearsalSession(
                         mode=mode,
                         character=character,

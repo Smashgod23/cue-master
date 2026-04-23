@@ -79,7 +79,13 @@ export default function RehearsalRoom() {
   });
 
   const toggleMode = () => {
-    setMode((prev) => (prev === "learning" ? "performance" : "learning"));
+    setMode((prev) => {
+      const next = prev === "learning" ? "performance" : "learning";
+      // Only restart if we're mid-rehearsal; otherwise the Begin Rehearsal
+      // click will pick up the new mode normally.
+      if (wsConnectedRef.current) restartSession(next, userCharKey);
+      return next;
+    });
   };
 
   // --- UI state ---
@@ -90,28 +96,19 @@ export default function RehearsalRoom() {
   const ws = useRehearsalSocket();
   const { connected: wsConnected, connect: wsConnect, disconnect: wsDisconnect } = ws;
 
-  // The backend session's mode/character is set once, at `init` time. We need
-  // to restart the socket whenever the UI mode or character diverges from what
-  // the backend was last told. Track that with refs and compare on every fire.
-  //
-  // Naive dep lists don't work here: leaving `wsConnected` out drops mode
-  // changes that happen during the handshake, while including it causes the
-  // effect to fire the instant a new connection opens and disconnect it
-  // immediately. The "last committed" refs break the feedback loop.
-  const committedModeRef = useRef(null);
-  const committedCharRef = useRef(null);
-  const wrappedConnect = useCallback((m, c) => {
-    committedModeRef.current = m;
-    committedCharRef.current = c;
-    wsConnect(m, c);
-  }, [wsConnect]);
-  useEffect(() => {
-    if (!wsConnected) return;
-    if (mode === committedModeRef.current && userCharKey === committedCharRef.current) return;
-    wsDisconnect();
-    const timer = setTimeout(() => wrappedConnect(mode, userCharKey), 300);
-    return () => clearTimeout(timer);
-  }, [mode, userCharKey, wsConnected, wsDisconnect, wrappedConnect]);
+  // Restart the WebSocket session. Kept as a plain callback (not a useEffect
+  // return-cleanup) so React can't cancel the reconnect timer when the
+  // intervening wsDisconnect() flips wsConnected and re-renders.
+  const wsConnectedRef = useRef(wsConnected);
+  useEffect(() => { wsConnectedRef.current = wsConnected; }, [wsConnected]);
+  const restartSession = useCallback((m, c) => {
+    if (wsConnectedRef.current) {
+      wsDisconnect();
+      setTimeout(() => wsConnect(m, c), 300);
+    } else {
+      wsConnect(m, c);
+    }
+  }, [wsConnect, wsDisconnect]);
 
   return (
     <div className="h-screen flex flex-col bg-parchment">
@@ -243,9 +240,9 @@ export default function RehearsalRoom() {
             liveState={ws.status}
             connected={ws.connected}
             micError={ws.micError}
-            onConnect={() => wrappedConnect(mode, userCharKey)}
+            onConnect={() => ws.connect(mode, userCharKey)}
             onDisconnect={ws.disconnect}
-            onRestart={() => { ws.disconnect(); setTimeout(() => wrappedConnect(mode, userCharKey), 300); }}
+            onRestart={() => restartSession(mode, userCharKey)}
             userCharName={userCharInfo?.name}
             userCharColor={userCharInfo?.color}
             onOpenNotes={() => {
