@@ -163,11 +163,17 @@ export default function RehearsalRoom() {
   const wrappedConnect = useCallback((m, c) => {
     committedModeRef.current = m;
     committedCharRef.current = c;
-    // A fresh rehearsal starts with a clean triage slate.
-    setSavedNotes([]);
-    setDiscardedIds(new Set());
     wsConnect(m, c);
   }, [wsConnect]);
+
+  // A fresh rehearsal starts with a clean triage slate. Only called when the
+  // user explicitly clicks Begin Rehearsal — mode-switch and Restart Scene
+  // both reuse wrappedConnect so they preserve saved/discarded notes.
+  const beginRehearsal = useCallback(() => {
+    setSavedNotes([]);
+    setDiscardedIds(new Set());
+    wrappedConnect(mode, userCharKey);
+  }, [mode, userCharKey, wrappedConnect]);
 
   // Reconcile UI mode/character with backend session. Runs whenever either
   // side changes. Crucially this effect does NOT return a cleanup function:
@@ -222,9 +228,13 @@ export default function RehearsalRoom() {
   }, []);
 
   // End Session: stop the rehearsal and open the modal on the Saved tab so the
-  // user can review everything they flagged before leaving the page.
+  // user can review everything they flagged before leaving the page. The
+  // incrementing token tells DirectorNotes to snap its filter to "session";
+  // without it, the modal would reopen on whichever tab the user visited last.
+  const [sessionViewToken, setSessionViewToken] = useState(0);
   const handleEndSession = useCallback(() => {
     stopRehearsal();
+    setSessionViewToken((t) => t + 1);
     setNotesOpen(true);
   }, [stopRehearsal]);
 
@@ -355,7 +365,7 @@ export default function RehearsalRoom() {
           {scriptHidden ? (
             <HiddenScriptView
               status={ws.connected ? ws.status : "idle"}
-              transcript={ws.transcript}
+              transcript={ws.connected ? ws.transcript : null}
               userCharName={userCharInfo?.name}
             />
           ) : (
@@ -394,7 +404,7 @@ export default function RehearsalRoom() {
             liveState={ws.status}
             connected={ws.connected}
             micError={ws.micError}
-            onConnect={() => wrappedConnect(mode, userCharKey)}
+            onConnect={beginRehearsal}
             onDisconnect={stopRehearsal}
             onRestart={() => { stopRehearsal(); setTimeout(() => wrappedConnect(mode, userCharKey), 300); }}
             onEndSession={handleEndSession}
@@ -420,6 +430,7 @@ export default function RehearsalRoom() {
         onSaveNote={handleSaveNote}
         onDiscardNote={handleDiscardNote}
         onEndSession={handleEndSession}
+        sessionViewToken={sessionViewToken}
         allLines={isUploaded ? parsedScript : null}
         charMap={charMap}
         isUploaded={isUploaded}

@@ -51,11 +51,22 @@ export default function DirectorNotes({
   onSaveNote,
   onDiscardNote,
   onEndSession,
+  sessionViewToken = 0,
   allLines,
   charMap,
   isUploaded,
 }) {
   const [filter, setFilter] = useState("all");
+
+  // When RehearsalRoom bumps the token (End Session clicked), snap to the
+  // Saved tab so the user lands on the summary they're there to review.
+  // Updating state during render (with a guard) is the React-recommended
+  // pattern for syncing to a prop change without cascading an effect.
+  const [prevSessionToken, setPrevSessionToken] = useState(sessionViewToken);
+  if (prevSessionToken !== sessionViewToken) {
+    setPrevSessionToken(sessionViewToken);
+    if (sessionViewToken > 0) setFilter("session");
+  }
 
   const scriptLines = allLines && allLines.length > 0 ? allLines : dummyLines;
   const characters = charMap || dummyChars;
