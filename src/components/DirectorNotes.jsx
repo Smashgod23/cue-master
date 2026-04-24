@@ -35,9 +35,11 @@ const typeLabels = {
  *   charMap         – character display map { "OBERON": { name, color }, … }
  *   liveNotes       – director note objects from the WebSocket (live feed)
  *   savedNotes      – notes the user has marked Useful (persist across tabs)
- *   discardedIds    – Set of note IDs the user has dismissed
+ *   discardedKeys   – Set of triage keys the user has dismissed
+ *   triageKeyOf     – fn(note) → stable content fingerprint used for both
+ *                     the discard set and save dedup; survives reconnects
  *   onSaveNote      – called with a note when the user marks it Useful
- *   onDiscardNote   – called with a note id when the user dismisses it
+ *   onDiscardNote   – called with the full note when the user dismisses it
  *   onEndSession    – called when the user clicks End Session
  *   isUploaded      – true when a real script is loaded (suppresses dummy fallback)
  */
@@ -47,7 +49,8 @@ export default function DirectorNotes({
   activeLineId,
   liveNotes,
   savedNotes = [],
-  discardedIds,
+  discardedKeys,
+  triageKeyOf,
   onSaveNote,
   onDiscardNote,
   onEndSession,
@@ -70,8 +73,11 @@ export default function DirectorNotes({
 
   const scriptLines = allLines && allLines.length > 0 ? allLines : dummyLines;
   const characters = charMap || dummyChars;
-  const discardSet = discardedIds || new Set();
-  const savedIds = new Set(savedNotes.map((n) => n.id));
+  // Fall back to a note's own id when the parent doesn't pass a triage fn so
+  // the component still works in isolation (tests, the dummy-note demo).
+  const keyOf = triageKeyOf || ((n) => n.id);
+  const discardSet = discardedKeys || new Set();
+  const savedKeys = new Set(savedNotes.map(keyOf));
 
   // When a real script is loaded, don't fall back to dummy notes
   const liveSource =
@@ -82,7 +88,7 @@ export default function DirectorNotes({
         : dummyNotes;
 
   // Hide notes the user has already discarded (but keep saved ones visible in the live feed too)
-  const visibleLive = liveSource.filter((n) => !discardSet.has(n.id));
+  const visibleLive = liveSource.filter((n) => !discardSet.has(keyOf(n)));
 
   const isSessionTab = filter === "session";
 
@@ -102,7 +108,7 @@ export default function DirectorNotes({
     const charInfo = referencedLine?.character
       ? characters[referencedLine.character]
       : null;
-    const alreadySaved = savedIds.has(note.id);
+    const alreadySaved = savedKeys.has(keyOf(note));
 
     return (
       <div
@@ -144,7 +150,7 @@ export default function DirectorNotes({
         {!readOnly && (
           <div className="mt-4 flex items-center gap-2">
             <button
-              onClick={() => onDiscardNote && onDiscardNote(note.id)}
+              onClick={() => onDiscardNote && onDiscardNote(note)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-sans font-medium
                 bg-parchment text-ink-muted ring-1 ring-parchment-deep
                 hover:text-crimson hover:ring-crimson/30 transition-colors cursor-pointer"

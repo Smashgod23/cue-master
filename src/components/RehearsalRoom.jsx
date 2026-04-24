@@ -41,6 +41,15 @@ function readSession(key) {
 }
 
 /**
+ * Content-based fingerprint used to identify "the same note" across socket
+ * reconnects. useRehearsalSocket assigns Date.now() ids which aren't stable,
+ * so triage has to hash on what the director actually said instead.
+ */
+function triageKeyOf(note) {
+  return `${note.type || ""}|${note.severity || ""}|${note.lineId ?? ""}|${note.text || ""}`;
+}
+
+/**
  * Minimal full-pane view shown when the user hides the script. Keeps the
  * rehearsal going but removes every visual distraction except what they just
  * said, rendered as large transcript text. Designed so someone can practice
@@ -148,8 +157,14 @@ export default function RehearsalRoom() {
   // Director-notes triage state. These are deliberately kept here rather than
   // in the socket hook because they reflect user judgment on notes, not
   // protocol state — the socket only knows what came in.
+  //
+  // Triage is stored by content fingerprint (type|severity|lineId|text) rather
+  // than by note.id, because useRehearsalSocket assigns a fresh Date.now() id
+  // every time a director_note arrives. Without a stable key, a Restart Scene
+  // or mode-switch reconnect would resurface previously-discarded notes and
+  // double-save repeats of ones the user already flagged.
   const [savedNotes, setSavedNotes] = useState([]);
-  const [discardedIds, setDiscardedIds] = useState(() => new Set());
+  const [discardedKeys, setDiscardedKeys] = useState(() => new Set());
 
   // --- WebSocket ---
   const ws = useRehearsalSocket();
@@ -171,7 +186,7 @@ export default function RehearsalRoom() {
   // both reuse wrappedConnect so they preserve saved/discarded notes.
   const beginRehearsal = useCallback(() => {
     setSavedNotes([]);
-    setDiscardedIds(new Set());
+    setDiscardedKeys(new Set());
     wrappedConnect(mode, userCharKey);
   }, [mode, userCharKey, wrappedConnect]);
 
@@ -212,19 +227,21 @@ export default function RehearsalRoom() {
   }, []);
 
   const handleSaveNote = useCallback((note) => {
+    const key = triageKeyOf(note);
     setSavedNotes((prev) =>
-      prev.some((n) => n.id === note.id) ? prev : [...prev, note]
+      prev.some((n) => triageKeyOf(n) === key) ? prev : [...prev, note]
     );
   }, []);
 
-  const handleDiscardNote = useCallback((noteId) => {
-    setDiscardedIds((prev) => {
+  const handleDiscardNote = useCallback((note) => {
+    const key = triageKeyOf(note);
+    setDiscardedKeys((prev) => {
       const next = new Set(prev);
-      next.add(noteId);
+      next.add(key);
       return next;
     });
     // Discarding also drops it from Saved if it was previously saved.
-    setSavedNotes((prev) => prev.filter((n) => n.id !== noteId));
+    setSavedNotes((prev) => prev.filter((n) => triageKeyOf(n) !== key));
   }, []);
 
   // End Session: stop the rehearsal and open the modal on the Saved tab so the
@@ -426,7 +443,8 @@ export default function RehearsalRoom() {
         activeLineId={ws.activeLine}
         liveNotes={ws.notes}
         savedNotes={savedNotes}
-        discardedIds={discardedIds}
+        discardedKeys={discardedKeys}
+        triageKeyOf={triageKeyOf}
         onSaveNote={handleSaveNote}
         onDiscardNote={handleDiscardNote}
         onEndSession={handleEndSession}
