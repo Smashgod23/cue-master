@@ -1750,9 +1750,10 @@ def _tts(text: str, character: str = "", voice_map: Optional[dict] = None) -> by
     if voice_map is None:
         voice_map = {}
     voice = _voice_for_character(character, voice_map)
-    # 180 wpm is a touch slower than say's default (~200) — noticeably more
-    # deliberate for verse/drama without dragging.
-    rate = "180"
+    # 155 wpm gives scene-partner lines a clearly slower, more intelligible
+    # cadence than say's default (~200). Users reported 180 was still hard to
+    # follow during live rehearsal.
+    rate = "155"
 
     aiff_path = None
     wav_path = None

@@ -40,6 +40,61 @@ function readSession(key) {
   }
 }
 
+/**
+ * Minimal full-pane view shown when the user hides the script. Keeps the
+ * rehearsal going but removes every visual distraction except what they just
+ * said, rendered as large transcript text. Designed so someone can practice
+ * lines from memory without peeking at the script.
+ */
+function HiddenScriptView({ status, transcript, userCharName }) {
+  const hasText = Boolean(transcript?.text);
+  const statusLabel =
+    status === "speaking" ? "Scene partner speaking"
+    : status === "analyzing" ? "Analyzing your delivery"
+    : status === "listening" ? "Listening"
+    : "Idle";
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center px-8 py-12 text-center bg-parchment">
+      <div className="mb-10 flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full ${
+          status === "listening" ? "bg-gold animate-pulse"
+          : status === "analyzing" ? "bg-gold"
+          : status === "speaking" ? "bg-crimson"
+          : "bg-warmgray-light"
+        }`} />
+        <span className="font-sans text-[11px] uppercase tracking-[0.25em] text-warmgray">
+          {statusLabel}
+        </span>
+      </div>
+
+      {userCharName && (
+        <p className="font-sans text-[10px] uppercase tracking-[0.3em] text-warmgray-light mb-6">
+          You are {userCharName}
+        </p>
+      )}
+
+      <div className="max-w-4xl w-full">
+        {hasText ? (
+          <p className="font-serif text-4xl md:text-5xl leading-snug text-ink italic">
+            "{transcript.text}"
+          </p>
+        ) : (
+          <p className="font-serif text-3xl md:text-4xl text-warmgray italic leading-snug">
+            Speak your line — the script is hidden so you can rehearse from memory.
+          </p>
+        )}
+      </div>
+
+      {transcript?.wpm != null && (
+        <p className="mt-10 font-sans text-xs uppercase tracking-widest text-warmgray-light">
+          {transcript.wpm} wpm
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function RehearsalRoom() {
   // --- Derive script + setup from sessionStorage ---
   const parsedScript = useMemo(() => readSession("parsedScript"), []);
@@ -88,6 +143,13 @@ export default function RehearsalRoom() {
   // --- UI state ---
   const [notesOpen, setNotesOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [scriptHidden, setScriptHidden] = useState(false);
+
+  // Director-notes triage state. These are deliberately kept here rather than
+  // in the socket hook because they reflect user judgment on notes, not
+  // protocol state — the socket only knows what came in.
+  const [savedNotes, setSavedNotes] = useState([]);
+  const [discardedIds, setDiscardedIds] = useState(() => new Set());
 
   // --- WebSocket ---
   const ws = useRehearsalSocket();
@@ -101,6 +163,9 @@ export default function RehearsalRoom() {
   const wrappedConnect = useCallback((m, c) => {
     committedModeRef.current = m;
     committedCharRef.current = c;
+    // A fresh rehearsal starts with a clean triage slate.
+    setSavedNotes([]);
+    setDiscardedIds(new Set());
     wsConnect(m, c);
   }, [wsConnect]);
 
@@ -140,6 +205,29 @@ export default function RehearsalRoom() {
     if (reconcileTimerRef.current) clearTimeout(reconcileTimerRef.current);
   }, []);
 
+  const handleSaveNote = useCallback((note) => {
+    setSavedNotes((prev) =>
+      prev.some((n) => n.id === note.id) ? prev : [...prev, note]
+    );
+  }, []);
+
+  const handleDiscardNote = useCallback((noteId) => {
+    setDiscardedIds((prev) => {
+      const next = new Set(prev);
+      next.add(noteId);
+      return next;
+    });
+    // Discarding also drops it from Saved if it was previously saved.
+    setSavedNotes((prev) => prev.filter((n) => n.id !== noteId));
+  }, []);
+
+  // End Session: stop the rehearsal and open the modal on the Saved tab so the
+  // user can review everything they flagged before leaving the page.
+  const handleEndSession = useCallback(() => {
+    stopRehearsal();
+    setNotesOpen(true);
+  }, [stopRehearsal]);
+
   return (
     <div className="h-screen flex flex-col bg-parchment">
       {/* Top bar */}
@@ -157,6 +245,32 @@ export default function RehearsalRoom() {
         </Link>
 
         <div className="flex items-center gap-3">
+          {/* Hide / Show script */}
+          <button
+            onClick={() => setScriptHidden((v) => !v)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-sans font-medium transition-all cursor-pointer
+              ${scriptHidden
+                ? "bg-crimson text-white hover:bg-crimson-muted"
+                : "text-ink-muted hover:bg-crimson/10 hover:text-crimson"
+              }`}
+            aria-pressed={scriptHidden}
+            aria-label={scriptHidden ? "Show script" : "Hide script"}
+          >
+            {scriptHidden ? (
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a19.77 19.77 0 0 1 5.06-5.94" />
+                <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c7 0 11 8 11 8a19.77 19.77 0 0 1-3.16 4.19" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            )}
+            <span className="hidden sm:inline">{scriptHidden ? "Show Script" : "Hide Script"}</span>
+          </button>
+
           {/* Mobile panel toggle */}
           <button
             onClick={() => setPanelOpen(!panelOpen)}
@@ -203,8 +317,10 @@ export default function RehearsalRoom() {
         </div>
       )}
 
-      {/* Live caption bar — shows what Whisper heard you say */}
-      {ws.connected && (
+      {/* Live caption bar — shows what Whisper heard you say. In Hide mode the
+          big HiddenScriptView already surfaces the transcript, so the thin bar
+          becomes redundant noise. */}
+      {ws.connected && !scriptHidden && (
         <div className="border-b border-parchment-deep bg-ink text-parchment px-6 py-2.5 flex items-center gap-3">
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
             ws.status === "listening" ? "bg-gold animate-pulse"
@@ -234,16 +350,24 @@ export default function RehearsalRoom() {
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden relative">
-        {/* Left pane — Script */}
+        {/* Left pane — Script OR Hide view */}
         <div className="flex-1 min-w-0 lg:flex-[3]">
-          <ScriptView
-            lines={isUploaded ? parsedScript : null}
-            meta={scriptMeta}
-            userCharKey={userCharKey}
-            charMap={charMap}
-            activeLine={ws.activeLine}
-            onLineClick={() => {}}
-          />
+          {scriptHidden ? (
+            <HiddenScriptView
+              status={ws.connected ? ws.status : "idle"}
+              transcript={ws.transcript}
+              userCharName={userCharInfo?.name}
+            />
+          ) : (
+            <ScriptView
+              lines={isUploaded ? parsedScript : null}
+              meta={scriptMeta}
+              userCharKey={userCharKey}
+              charMap={charMap}
+              activeLine={ws.activeLine}
+              onLineClick={() => {}}
+            />
+          )}
         </div>
 
         <div className="hidden lg:block w-px bg-parchment-deep" />
@@ -273,6 +397,8 @@ export default function RehearsalRoom() {
             onConnect={() => wrappedConnect(mode, userCharKey)}
             onDisconnect={stopRehearsal}
             onRestart={() => { stopRehearsal(); setTimeout(() => wrappedConnect(mode, userCharKey), 300); }}
+            onEndSession={handleEndSession}
+            savedCount={savedNotes.length}
             userCharName={userCharInfo?.name}
             userCharColor={userCharInfo?.color}
             onOpenNotes={() => {
@@ -289,6 +415,11 @@ export default function RehearsalRoom() {
         onClose={() => setNotesOpen(false)}
         activeLineId={ws.activeLine}
         liveNotes={ws.notes}
+        savedNotes={savedNotes}
+        discardedIds={discardedIds}
+        onSaveNote={handleSaveNote}
+        onDiscardNote={handleDiscardNote}
+        onEndSession={handleEndSession}
         allLines={isUploaded ? parsedScript : null}
         charMap={charMap}
         isUploaded={isUploaded}

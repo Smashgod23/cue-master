@@ -31,45 +31,147 @@ const typeLabels = {
 
 /**
  * Props:
- *   allLines  – full script line array for line-reference previews
- *   charMap   – character display map { "OBERON": { name, color }, … }
- *   liveNotes – director note objects from the WebSocket
- *   isUploaded – true when a real script is loaded (suppresses dummy note fallback)
+ *   allLines        – full script line array for line-reference previews
+ *   charMap         – character display map { "OBERON": { name, color }, … }
+ *   liveNotes       – director note objects from the WebSocket (live feed)
+ *   savedNotes      – notes the user has marked Useful (persist across tabs)
+ *   discardedIds    – Set of note IDs the user has dismissed
+ *   onSaveNote      – called with a note when the user marks it Useful
+ *   onDiscardNote   – called with a note id when the user dismisses it
+ *   onEndSession    – called when the user clicks End Session
+ *   isUploaded      – true when a real script is loaded (suppresses dummy fallback)
  */
-export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes, allLines, charMap, isUploaded }) {
+export default function DirectorNotes({
+  isOpen,
+  onClose,
+  activeLineId,
+  liveNotes,
+  savedNotes = [],
+  discardedIds,
+  onSaveNote,
+  onDiscardNote,
+  onEndSession,
+  allLines,
+  charMap,
+  isUploaded,
+}) {
   const [filter, setFilter] = useState("all");
 
   const scriptLines = allLines && allLines.length > 0 ? allLines : dummyLines;
   const characters = charMap || dummyChars;
+  const discardSet = discardedIds || new Set();
+  const savedIds = new Set(savedNotes.map((n) => n.id));
 
   // When a real script is loaded, don't fall back to dummy notes
-  const sourceNotes =
+  const liveSource =
     liveNotes && liveNotes.length > 0
       ? liveNotes
       : isUploaded
         ? []
         : dummyNotes;
 
-  const filteredNotes =
-    filter === "all"
-      ? sourceNotes
+  // Hide notes the user has already discarded (but keep saved ones visible in the live feed too)
+  const visibleLive = liveSource.filter((n) => !discardSet.has(n.id));
+
+  const isSessionTab = filter === "session";
+
+  const filteredNotes = isSessionTab
+    ? savedNotes
+    : filter === "all"
+      ? visibleLive
       : filter === "current"
-        ? sourceNotes.filter((n) => n.lineId === activeLineId)
-        : sourceNotes.filter((n) => n.type === filter);
+        ? visibleLive.filter((n) => n.lineId === activeLineId)
+        : visibleLive.filter((n) => n.type === filter);
 
   if (!isOpen) return null;
 
+  const renderNote = (note, idx, { readOnly }) => {
+    const style = severityStyles[note.severity] || severityStyles.note;
+    const referencedLine = scriptLines.find((l) => l.id === note.lineId);
+    const charInfo = referencedLine?.character
+      ? characters[referencedLine.character]
+      : null;
+    const alreadySaved = savedIds.has(note.id);
+
+    return (
+      <div
+        key={note.id}
+        className={`p-5 rounded-xl border ${style.border} ${style.bg} animate-fade-in-up`}
+        style={{ animationDelay: `${idx * 60}ms` }}
+      >
+        <div className="flex items-center gap-2 mb-2.5">
+          <span className="text-base">{style.icon}</span>
+          <span
+            className={`px-2 py-0.5 rounded text-[10px] font-sans font-semibold uppercase tracking-wider ${style.badge}`}
+          >
+            {typeLabels[note.type] || note.type}
+          </span>
+          {charInfo && (
+            <span className="text-xs font-sans text-warmgray">
+              {charInfo.name}, line {note.lineId}
+            </span>
+          )}
+          {alreadySaved && !readOnly && (
+            <span className="ml-auto text-[10px] font-sans font-semibold uppercase tracking-wider text-gold-deep">
+              Saved
+            </span>
+          )}
+        </div>
+
+        <p className="font-body text-sm text-ink-soft leading-relaxed">
+          {note.text}
+        </p>
+
+        {referencedLine && (
+          <div className="mt-3 pt-3 border-t border-parchment-deep/50">
+            <p className="font-body text-xs text-warmgray italic leading-relaxed line-clamp-2">
+              "{referencedLine.text}"
+            </p>
+          </div>
+        )}
+
+        {!readOnly && (
+          <div className="mt-4 flex items-center gap-2">
+            <button
+              onClick={() => onDiscardNote && onDiscardNote(note.id)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-sans font-medium
+                bg-parchment text-ink-muted ring-1 ring-parchment-deep
+                hover:text-crimson hover:ring-crimson/30 transition-colors cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+              Discard
+            </button>
+            <button
+              onClick={() => !alreadySaved && onSaveNote && onSaveNote(note)}
+              disabled={alreadySaved}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-sans font-medium transition-colors
+                ${alreadySaved
+                  ? "bg-gold/20 text-gold-deep cursor-default"
+                  : "bg-parchment text-ink-muted ring-1 ring-parchment-deep hover:text-gold-deep hover:ring-gold/40 cursor-pointer"
+                }`}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              {alreadySaved ? "Saved" : "Useful"}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
       <div
         className="absolute inset-0 bg-ink/40 backdrop-blur-sm"
         onClick={onClose}
       />
 
-      {/* Modal */}
       <div className="relative w-full max-w-2xl max-h-[80vh] bg-parchment rounded-2xl shadow-2xl border border-parchment-deep animate-fade-in-up overflow-hidden flex flex-col">
-        {/* Header */}
         <div className="px-8 py-6 border-b border-parchment-deep">
           <div className="flex items-start justify-between">
             <div>
@@ -78,10 +180,12 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
                   <path d="M12 20h9" />
                   <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
                 </svg>
-                Director's Notes
+                {isSessionTab ? "Session Notes" : "Director's Notes"}
               </h3>
               <p className="font-body text-sm text-warmgray mt-1">
-                Feedback on your performance and delivery
+                {isSessionTab
+                  ? "Everything you've saved this session"
+                  : "Feedback on your performance and delivery"}
               </p>
             </div>
             <button
@@ -96,7 +200,6 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
             </button>
           </div>
 
-          {/* Filter pills */}
           <div className="flex flex-wrap gap-2 mt-4">
             {[
               { key: "all", label: "All Notes" },
@@ -105,6 +208,7 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
               { key: "emotion", label: "Emotion" },
               { key: "inflection", label: "Inflection" },
               { key: "blocking", label: "Blocking" },
+              { key: "session", label: `Saved (${savedNotes.length})` },
             ].map((f) => (
               <button
                 key={f.key}
@@ -121,70 +225,44 @@ export default function DirectorNotes({ isOpen, onClose, activeLineId, liveNotes
           </div>
         </div>
 
-        {/* Notes list */}
         <div className="flex-1 overflow-y-auto px-8 py-5 space-y-4">
           {filteredNotes.length === 0 ? (
             <div className="text-center py-12">
               <p className="font-serif text-lg italic text-warmgray">
-                No notes for this selection
+                {isSessionTab
+                  ? "No notes saved yet"
+                  : "No notes for this selection"}
               </p>
               <p className="font-body text-sm text-warmgray-light mt-1">
-                Keep rehearsing - feedback will appear as you perform
+                {isSessionTab
+                  ? "Mark a note as Useful to keep it here"
+                  : "Keep rehearsing - feedback will appear as you perform"}
               </p>
             </div>
           ) : (
-            filteredNotes.map((note, idx) => {
-              const style = severityStyles[note.severity] || severityStyles.note;
-              const referencedLine = scriptLines.find((l) => l.id === note.lineId);
-              const charInfo = referencedLine?.character
-                ? characters[referencedLine.character]
-                : null;
-
-              return (
-                <div
-                  key={note.id}
-                  className={`p-5 rounded-xl border ${style.border} ${style.bg} animate-fade-in-up`}
-                  style={{ animationDelay: `${idx * 60}ms` }}
-                >
-                  {/* Note header */}
-                  <div className="flex items-center gap-2 mb-2.5">
-                    <span className="text-base">{style.icon}</span>
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-sans font-semibold uppercase tracking-wider ${style.badge}`}
-                    >
-                      {typeLabels[note.type] || note.type}
-                    </span>
-                    {charInfo && (
-                      <span className="text-xs font-sans text-warmgray">
-                        {charInfo.name}, line {note.lineId}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Note body */}
-                  <p className="font-body text-sm text-ink-soft leading-relaxed">
-                    {note.text}
-                  </p>
-
-                  {/* Referenced line preview */}
-                  {referencedLine && (
-                    <div className="mt-3 pt-3 border-t border-parchment-deep/50">
-                      <p className="font-body text-xs text-warmgray italic leading-relaxed line-clamp-2">
-                        "{referencedLine.text}"
-                      </p>
-                    </div>
-                  )}
-                </div>
-              );
-            })
+            filteredNotes.map((note, idx) =>
+              renderNote(note, idx, { readOnly: isSessionTab })
+            )
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-8 py-4 border-t border-parchment-deep bg-parchment-warm/50">
-          <p className="text-xs font-sans text-warmgray text-center">
-            {filteredNotes.length} note{filteredNotes.length !== 1 ? "s" : ""} - Generated from AI analysis of your rehearsal
+        <div className="px-8 py-4 border-t border-parchment-deep bg-parchment-warm/50 flex items-center justify-between gap-3">
+          <p className="text-xs font-sans text-warmgray">
+            {filteredNotes.length} note{filteredNotes.length !== 1 ? "s" : ""}
+            {isSessionTab ? " saved" : ""}
           </p>
+          {onEndSession && (
+            <button
+              onClick={onEndSession}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-sans font-semibold
+                bg-ink text-white hover:bg-ink-soft active:scale-[0.98] transition-all cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              End Session
+            </button>
+          )}
         </div>
       </div>
     </div>
