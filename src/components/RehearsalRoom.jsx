@@ -44,6 +44,12 @@ function readSession(key) {
  * Content-based fingerprint used to identify "the same note" across socket
  * reconnects. useRehearsalSocket assigns Date.now() ids which aren't stable,
  * so triage has to hash on what the director actually said instead.
+ *
+ * For line-less notes, two arrivals with identical type/severity/text collapse
+ * into one triage entry. That is intentional: if the director repeats the
+ * exact same generic feedback, the user's Useful/Discard decision should carry
+ * over. If the backend ever needs to treat those as distinct, it should emit a
+ * stable server-side note id we can mix in here.
  */
 function triageKeyOf(note) {
   return `${note.type || ""}|${note.severity || ""}|${note.lineId ?? ""}|${note.text || ""}`;
