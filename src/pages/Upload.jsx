@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 
 const ACCEPTED_TYPES = {
@@ -10,13 +10,30 @@ const ACCEPTED_TYPES = {
 
 const ACCEPTED_EXTENSIONS = Object.values(ACCEPTED_TYPES).join(", ");
 
+// Treat touch-primary devices (no hover, coarse pointer) as mobile so we can
+// surface an explicit "Take Photo" affordance. Desktops keep drag-and-drop.
+const MOBILE_QUERY = "(hover: none) and (pointer: coarse)";
+
 export default function Upload() {
   const navigate = useNavigate();
-  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const [fileName, setFileName] = useState(null);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia(MOBILE_QUERY).matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia(MOBILE_QUERY);
+    const onChange = (e) => setIsMobile(e.matches);
+    mql.addEventListener?.("change", onChange);
+    return () => mql.removeEventListener?.("change", onChange);
+  }, []);
 
   const handleFile = useCallback(async (file) => {
     if (!file) return;
@@ -119,54 +136,102 @@ export default function Upload() {
             We'll parse the dialogue and stage directions automatically.
           </p>
 
-          {/* Drop zone */}
-          <div
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
-            onClick={() => !uploading && inputRef.current?.click()}
-            className={`mt-8 border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-200 cursor-pointer
-              ${dragging
-                ? "border-gold bg-gold/5 scale-[1.01]"
-                : "border-parchment-deep hover:border-warmgray-light bg-parchment-warm/30"
-              }
-              ${uploading ? "pointer-events-none opacity-70" : ""}
-            `}
-          >
-            {uploading ? (
+          {/* Upload zone — drag-drop on desktop, explicit camera/library buttons on mobile */}
+          {uploading ? (
+            <div className="mt-8 border-2 border-dashed border-parchment-deep bg-parchment-warm/30 rounded-2xl p-12 text-center">
               <div className="flex flex-col items-center gap-4">
-                {/* Spinning indicator */}
                 <div className="w-12 h-12 rounded-full border-3 border-parchment-deep border-t-crimson animate-spin" />
                 <p className="font-serif text-lg text-ink italic">
                   The Dramaturg is reading your script...
                 </p>
                 <p className="font-sans text-xs text-warmgray">{fileName}</p>
               </div>
-            ) : (
-              <>
-                <div className="w-14 h-14 mx-auto rounded-xl bg-parchment-deep/40 flex items-center justify-center mb-4">
-                  <svg className="w-7 h-7 text-warmgray" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="17 8 12 3 7 8" />
-                    <line x1="12" y1="3" x2="12" y2="15" />
+            </div>
+          ) : isMobile ? (
+            <div className="mt-8 rounded-2xl border-2 border-dashed border-parchment-deep bg-parchment-warm/30 p-6">
+              <p className="font-serif text-lg text-ink text-center">
+                How would you like to add your script?
+              </p>
+              <div className="mt-5 flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => cameraInputRef.current?.click()}
+                  className="flex items-center justify-center gap-3 rounded-xl bg-crimson text-white font-sans text-sm font-medium py-3.5 px-4 shadow-sm shadow-crimson/20 active:scale-[0.99] transition"
+                >
+                  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                    <circle cx="12" cy="13" r="4" />
                   </svg>
-                </div>
-                <p className="font-serif text-lg text-ink">
-                  Drop your script here
-                </p>
-                <p className="font-sans text-xs text-warmgray mt-2">
-                  or click to browse - accepts {ACCEPTED_EXTENSIONS}
-                </p>
-              </>
-            )}
-          </div>
+                  Take a photo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center justify-center gap-3 rounded-xl bg-parchment border border-parchment-deep text-ink font-sans text-sm font-medium py-3.5 px-4 active:scale-[0.99] transition"
+                >
+                  <svg className="w-5 h-5 text-warmgray" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="21 15 16 10 5 21" />
+                  </svg>
+                  Choose from photos or files
+                </button>
+              </div>
+              <p className="font-sans text-[11px] text-warmgray text-center mt-4">
+                Accepts {ACCEPTED_EXTENSIONS}
+              </p>
+            </div>
+          ) : (
+            <div
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              onClick={() => fileInputRef.current?.click()}
+              className={`mt-8 border-2 border-dashed rounded-2xl p-12 text-center transition-all duration-200 cursor-pointer
+                ${dragging
+                  ? "border-gold bg-gold/5 scale-[1.01]"
+                  : "border-parchment-deep hover:border-warmgray-light bg-parchment-warm/30"
+                }
+              `}
+            >
+              <div className="w-14 h-14 mx-auto rounded-xl bg-parchment-deep/40 flex items-center justify-center mb-4">
+                <svg className="w-7 h-7 text-warmgray" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="17 8 12 3 7 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
+              </div>
+              <p className="font-serif text-lg text-ink">
+                Drag and drop your script here
+              </p>
+              <p className="font-sans text-xs text-warmgray mt-2">
+                or click to choose a file - accepts {ACCEPTED_EXTENSIONS}
+              </p>
+            </div>
+          )}
 
+          {/* General file picker — used by desktop click-to-browse and mobile "Choose from photos or files" */}
           <input
-            ref={inputRef}
+            ref={fileInputRef}
             type="file"
             accept=".pdf,.txt,.png,.jpg,.jpeg"
             className="hidden"
-            onChange={(e) => handleFile(e.target.files?.[0])}
+            onChange={(e) => {
+              handleFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
+          />
+          {/* Mobile camera input — capture forces the rear camera instead of the photo library */}
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              handleFile(e.target.files?.[0]);
+              e.target.value = "";
+            }}
           />
 
           {/* Error */}
