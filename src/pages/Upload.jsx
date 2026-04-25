@@ -42,6 +42,15 @@ export default function Upload() {
     const ext = file.name.split(".").pop().toLowerCase();
     const validExts = ["pdf", "txt", "png", "jpg", "jpeg"];
     if (!validExts.includes(ext)) {
+      // iOS captures HEIC by default; the camera input asks for JPEG but a small
+      // number of older iOS versions still hand back HEIC. Give those users a
+      // path forward instead of a generic "unsupported" message.
+      if (ext === "heic" || ext === "heif") {
+        setError(
+          "iPhone photos in HEIC format aren't supported yet. In Settings > Camera > Formats, pick \"Most Compatible\" to capture JPEGs, or pick an existing photo from your library.",
+        );
+        return;
+      }
       setError(`Unsupported file type (.${ext}). Please use ${ACCEPTED_EXTENSIONS}.`);
       return;
     }
@@ -221,11 +230,13 @@ export default function Upload() {
               e.target.value = "";
             }}
           />
-          {/* Mobile camera input — capture forces the rear camera instead of the photo library */}
+          {/* Mobile camera input — capture forces the rear camera instead of the photo library.
+              accept is restricted to JPEG/PNG so iOS Safari converts HEIC captures to JPEG before
+              handing the file back; image/* would accept HEIC and fail handleFile validation. */}
           <input
             ref={cameraInputRef}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png"
             capture="environment"
             className="hidden"
             onChange={(e) => {
