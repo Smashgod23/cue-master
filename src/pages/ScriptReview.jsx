@@ -19,6 +19,80 @@ function getCharacters(lines) {
 let _nextId = 1;
 function freshId() { return `new-${_nextId++}`; }
 
+function escapeRegexLiteral(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Decide what kind of line the after-cursor text should become when the
+// user splits a merged line. Returns { type, character?, text }.
+//
+// - Bracketed content like "(He exits)" or "[Aside]" -> stage_direction
+//   with brackets stripped.
+// - Stage-cue verbs ("Enter X", "Exit Y", "Exeunt") -> stage_direction.
+// - Text that begins with a known character name followed by a cue
+//   delimiter (period, colon, space) -> dialogue under that character.
+// - Generic ALL-CAPS prefix that looks like a name (e.g. "ROMEO. What ho!")
+//   -> dialogue under that new character name.
+// - Anything else -> dialogue continuation; caller fills in the character.
+function classifySplitContent(rawText, knownCharacters) {
+  const text = rawText.replace(/^\s+/, "");
+  if (!text) return { type: "continuation", text: "" };
+
+  // Bracketed stage direction. Strip outer brackets if the bracketed
+  // segment is the whole string; keep any trailing text alongside it.
+  const bracketStart = text.match(/^([\(\[\{])/);
+  if (bracketStart) {
+    const open = bracketStart[1];
+    const close = open === "(" ? ")" : open === "[" ? "]" : "}";
+    const closeIdx = text.indexOf(close, 1);
+    if (closeIdx !== -1) {
+      const inner = text.slice(1, closeIdx).trim();
+      const trailing = text.slice(closeIdx + 1).trim();
+      const combined = trailing ? `${inner} ${trailing}` : inner;
+      // Only mark "pure" when there's no trailing prose - the caller uses
+      // this to decide whether to merge into an adjacent stage_direction
+      // line, and merging trailing dialogue would contaminate it.
+      return { type: "stage_direction", text: combined, pureDirection: !trailing };
+    }
+    return { type: "stage_direction", text: text.slice(1).trim(), pureDirection: true };
+  }
+
+  // Common stage-cue verbs (Shakespeare and modern scripts both use these).
+  if (/^(Enter|Exit|Exeunt)\b/i.test(text)) {
+    return { type: "stage_direction", text: text.trim() };
+  }
+
+  // Known character cue. Try longest names first so "MR. SOUTH" wins over "MR".
+  const sortedChars = [...knownCharacters].sort((a, b) => b.length - a.length);
+  for (const c of sortedChars) {
+    const escaped = escapeRegexLiteral(c);
+    // Allow "." ":" "," ";" or whitespace after the name.
+    const re = new RegExp(`^${escaped}\\b[\\s.,:;]*(.*)$`, "is");
+    const m = text.match(re);
+    if (m && m[1].trim()) {
+      return { type: "dialogue", character: c, text: m[1].trim() };
+    }
+  }
+
+  // Generic ALL-CAPS character cue: "ROMEO. What ho!" or "MRS. SMITH: Hello".
+  // Up to ~30 chars, allowing internal periods (titles like "MR.") and spaces.
+  const capsMatch = text.match(/^([A-Z][A-Z'.\s]{1,28}?)[.:]\s+(.+)$/s);
+  if (capsMatch) {
+    const possibleName = capsMatch[1].replace(/\s+$/, "").trim();
+    // Require at least one capital letter run of length >= 2 to avoid
+    // matching single-letter prefixes like "I."
+    if (/[A-Z]{2,}/.test(possibleName) && capsMatch[2].trim()) {
+      return {
+        type: "dialogue",
+        character: possibleName,
+        text: capsMatch[2].trim(),
+      };
+    }
+  }
+
+  return { type: "continuation", text: text.trim() };
+}
+
 export default function ScriptReview() {
   const navigate = useNavigate();
   const original = useMemo(() => loadScript(), []);
@@ -81,22 +155,58 @@ export default function ScriptReview() {
     setEditingId(newLine.id);
   }
 
-  // Split the active line at the current cursor position.
-  // The text before the cursor stays on the current line;
-  // everything from the cursor forward becomes a new line below.
+  // Split the active line at the current cursor position. The text before
+  // the cursor stays put; the text after gets classified so the new line
+  // (a) inherits the right type/character without the user having to fix
+  // it manually and (b) merges into an adjacent stage_direction line when
+  // it itself looks like a direction.
   function splitAtCursor(id) {
     const pos = cursorRef.current;
-    const line = lines.find((l) => l.id === id);
-    if (!line) return;
-    const before = line.text.slice(0, pos).trim();
-    const after = line.text.slice(pos).trim();
-    // Update the current line with just the first half (clear corrections since text changed)
+    const idx = lines.findIndex((l) => l.id === id);
+    if (idx === -1) return;
+    const line = lines[idx];
+    const before = line.text.slice(0, pos).trimEnd();
+    const after = line.text.slice(pos);
+    if (!after.trim()) return;
+
+    const detected = classifySplitContent(after, characters);
     updateLine(id, { text: before, _corrections: undefined });
-    // Insert the second half as a new editable line below
+
+    if (detected.type === "stage_direction") {
+      const next = lines[idx + 1];
+      if (next && next.type === "stage_direction" && detected.pureDirection) {
+        // Prepend new direction onto the existing one - it occurred
+        // chronologically before the next direction in the original line.
+        // Only merge when the split content is purely a bracketed direction;
+        // merging mixed bracket+prose would contaminate the existing line.
+        updateLine(next.id, {
+          text: `${detected.text} ${next.text}`.trim(),
+          _corrections: undefined,
+        });
+        return;
+      }
+      insertAfter(id, {
+        type: "stage_direction",
+        character: "",
+        text: detected.text,
+      });
+      return;
+    }
+
+    if (detected.type === "dialogue") {
+      insertAfter(id, {
+        type: "dialogue",
+        character: detected.character || line.character,
+        text: detected.text,
+      });
+      return;
+    }
+
+    // Continuation: same character, same type
     insertAfter(id, {
-      character: line.character,
-      text: after,
       type: line.type,
+      character: line.character,
+      text: detected.text,
     });
   }
 
