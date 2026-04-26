@@ -48,11 +48,19 @@ function classifySplitContent(rawText, knownCharacters) {
     if (closeIdx !== -1) {
       const inner = text.slice(1, closeIdx).trim();
       const trailing = text.slice(closeIdx + 1).trim();
-      const combined = trailing ? `${inner} ${trailing}` : inner;
-      // Only mark "pure" when there's no trailing prose - the caller uses
-      // this to decide whether to merge into an adjacent stage_direction
-      // line, and merging trailing dialogue would contaminate it.
-      return { type: "stage_direction", text: combined, pureDirection: !trailing };
+      // When prose follows the bracket, surface the trailing chunk as a
+      // separate follow-on so the caller can emit it as its own dialogue
+      // line. Collapsing both into a single stage_direction would lose
+      // spoken text inside metadata.
+      if (trailing) {
+        return {
+          type: "stage_direction",
+          text: inner,
+          pureDirection: false,
+          followOn: classifySplitContent(trailing, knownCharacters),
+        };
+      }
+      return { type: "stage_direction", text: inner, pureDirection: true };
     }
     return { type: "stage_direction", text: text.slice(1).trim(), pureDirection: true };
   }
@@ -63,11 +71,13 @@ function classifySplitContent(rawText, knownCharacters) {
   }
 
   // Known character cue. Try longest names first so "MR. SOUTH" wins over "MR".
+  // Require an explicit cue delimiter (. : ; ,) after the name - whitespace
+  // alone is not enough, otherwise prose like "I warned JULIET not to go"
+  // gets retyped as a new JULIET line.
   const sortedChars = [...knownCharacters].sort((a, b) => b.length - a.length);
   for (const c of sortedChars) {
     const escaped = escapeRegexLiteral(c);
-    // Allow "." ":" "," ";" or whitespace after the name.
-    const re = new RegExp(`^${escaped}\\b[\\s.,:;]*(.*)$`, "is");
+    const re = new RegExp(`^${escaped}\\s*[.,:;]+\\s*(.+)$`, "is");
     const m = text.match(re);
     if (m && m[1].trim()) {
       return { type: "dialogue", character: c, text: m[1].trim() };
@@ -155,6 +165,25 @@ export default function ScriptReview() {
     setEditingId(newLine.id);
   }
 
+  function insertManyAfter(id, overridesList) {
+    if (overridesList.length === 0) return;
+    const newLines = overridesList.map((o) => ({
+      id: freshId(),
+      type: "dialogue",
+      character: characters[0] ?? "",
+      text: "",
+      ...o,
+    }));
+    setLines((prev) => {
+      const idx = prev.findIndex((l) => l.id === id);
+      const next = [...prev];
+      next.splice(idx + 1, 0, ...newLines);
+      return next;
+    });
+    // Drop the user into the first new line so they can immediately tweak it.
+    setEditingId(newLines[0].id);
+  }
+
   // Split the active line at the current cursor position. The text before
   // the cursor stays put; the text after gets classified so the new line
   // (a) inherits the right type/character without the user having to fix
@@ -172,42 +201,45 @@ export default function ScriptReview() {
     const detected = classifySplitContent(after, characters);
     updateLine(id, { text: before, _corrections: undefined });
 
-    if (detected.type === "stage_direction") {
-      const next = lines[idx + 1];
-      if (next && next.type === "stage_direction" && detected.pureDirection) {
-        // Prepend new direction onto the existing one - it occurred
-        // chronologically before the next direction in the original line.
-        // Only merge when the split content is purely a bracketed direction;
-        // merging mixed bracket+prose would contaminate the existing line.
-        updateLine(next.id, {
-          text: `${detected.text} ${next.text}`.trim(),
-          _corrections: undefined,
+    // Build the list of new lines to insert below the current line, in order.
+    const newLines = [];
+    let cursor = detected;
+    while (cursor) {
+      if (cursor.type === "stage_direction") {
+        newLines.push({ type: "stage_direction", character: "", text: cursor.text });
+      } else if (cursor.type === "dialogue") {
+        newLines.push({
+          type: "dialogue",
+          character: cursor.character || line.character,
+          text: cursor.text,
         });
-        return;
+      } else {
+        newLines.push({
+          type: line.type,
+          character: line.character,
+          text: cursor.text,
+        });
       }
-      insertAfter(id, {
-        type: "stage_direction",
-        character: "",
-        text: detected.text,
+      cursor = cursor.followOn;
+    }
+
+    // Special case: a single pure stage_direction can merge into the next
+    // existing stage_direction line, preserving line count.
+    const next = lines[idx + 1];
+    if (
+      newLines.length === 1
+      && newLines[0].type === "stage_direction"
+      && detected.pureDirection
+      && next && next.type === "stage_direction"
+    ) {
+      updateLine(next.id, {
+        text: `${newLines[0].text} ${next.text}`.trim(),
+        _corrections: undefined,
       });
       return;
     }
 
-    if (detected.type === "dialogue") {
-      insertAfter(id, {
-        type: "dialogue",
-        character: detected.character || line.character,
-        text: detected.text,
-      });
-      return;
-    }
-
-    // Continuation: same character, same type
-    insertAfter(id, {
-      type: line.type,
-      character: line.character,
-      text: detected.text,
-    });
+    insertManyAfter(id, newLines);
   }
 
   function revertCorrection(id, originalWord) {
