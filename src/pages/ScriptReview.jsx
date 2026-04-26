@@ -71,13 +71,17 @@ function classifySplitContent(rawText, knownCharacters) {
   }
 
   // Known character cue. Try longest names first so "MR. SOUTH" wins over "MR".
-  // Require an explicit cue delimiter (. : ; ,) after the name - whitespace
-  // alone is not enough, otherwise prose like "I warned JULIET not to go"
-  // gets retyped as a new JULIET line.
+  // Accept either punctuation (. , : ;) after the name, or whitespace
+  // followed by an uppercase letter. The uppercase test distinguishes a
+  // real cue ("JULIET But, soft!") from a prose mention
+  // ("I warned JULIET not to go").
   const sortedChars = [...knownCharacters].sort((a, b) => b.length - a.length);
   for (const c of sortedChars) {
     const escaped = escapeRegexLiteral(c);
-    const re = new RegExp(`^${escaped}\\s*[.,:;]+\\s*(.+)$`, "is");
+    const re = new RegExp(
+      `^${escaped}(?:\\s*[.,:;]+\\s*|\\s+(?=[A-Z]))(.+)$`,
+      "s",
+    );
     const m = text.match(re);
     if (m && m[1].trim()) {
       return { type: "dialogue", character: c, text: m[1].trim() };
