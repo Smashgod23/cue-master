@@ -1032,6 +1032,33 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
         "hose", "zinc", "nit",
     }
 
+    # OCR glyph confusions used to gate all-caps corrections so legitimate
+    # acronyms (CIA, NASA, LGBT) are not silently rewritten to dictionary
+    # neighbors. THC -> THE passes because c/e is a real scanner confusion;
+    # CIA -> VIA does not (c/v is not visually similar).
+    _ocr_pairs = frozenset({
+        frozenset({'c', 'e'}),
+        frozenset({'i', 'l'}),
+        frozenset({'i', 'h'}),
+        frozenset({'i', '1'}),
+        frozenset({'l', '1'}),
+        frozenset({'o', '0'}),
+        frozenset({'o', 'q'}),
+        frozenset({'m', 'n'}),
+        frozenset({'u', 'n'}),
+        frozenset({'r', 'n'}),
+        frozenset({'s', '5'}),
+        frozenset({'b', '6'}),
+    })
+
+    def _is_ocr_glyph_swap(orig: str, repl: str) -> bool:
+        if len(orig) != len(repl):
+            return False
+        diffs = [(x, y) for x, y in zip(orig.lower(), repl.lower()) if x != y]
+        if len(diffs) != 1:
+            return False
+        return frozenset(diffs[0]) in _ocr_pairs
+
     def _edit_distance(a: str, b: str) -> int:
         if abs(len(a) - len(b)) > 1:
             return 2
@@ -1131,6 +1158,14 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
             # for 3-letter unknowns are unreliable — "fbi"->"bi", "omg"->"om",
             # "usa"->"us" all pass edit-distance==1 but are clearly wrong.
             if len(part) == 3 and len(candidate) != len(part):
+                new_parts.append(part)
+                continue
+
+            # All-caps tokens are usually legitimate acronyms. Only rewrite
+            # them when the substitution matches a real OCR glyph confusion;
+            # without this gate CIA->VIA, NASA->NASAL, LGBT->GET all sneak
+            # through edit-distance==1 and corrupt acronyms in dialogue.
+            if part.isupper() and len(part) > 1 and not _is_ocr_glyph_swap(part, candidate):
                 new_parts.append(part)
                 continue
 
