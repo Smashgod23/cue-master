@@ -71,18 +71,17 @@ function classifySplitContent(rawText, knownCharacters) {
   }
 
   // Known character cue. Try longest names first so "MR. SOUTH" wins over "MR".
-  // Accept either punctuation (. , : ;) after the name, or whitespace
-  // followed by an uppercase letter. The uppercase test distinguishes a
-  // real cue ("JULIET But, soft!") from a prose mention
-  // ("I warned JULIET not to go").
+  // Match the name itself case-insensitively (the stored character list might
+  // be mixed-case while the OCR text is upper-case, or vice versa), then
+  // require either punctuation (. , : ;) or whitespace followed by an
+  // uppercase letter. The uppercase test distinguishes a real cue
+  // ("JULIET But, soft!") from a prose mention ("I warned JULIET not to go").
+  const delimiterRe = /^(?:\s*[.,:;]+\s*|\s+(?=[A-Z]))(.+)$/s;
   const sortedChars = [...knownCharacters].sort((a, b) => b.length - a.length);
   for (const c of sortedChars) {
-    const escaped = escapeRegexLiteral(c);
-    const re = new RegExp(
-      `^${escaped}(?:\\s*[.,:;]+\\s*|\\s+(?=[A-Z]))(.+)$`,
-      "s",
-    );
-    const m = text.match(re);
+    if (text.length <= c.length) continue;
+    if (text.slice(0, c.length).toLowerCase() !== c.toLowerCase()) continue;
+    const m = text.slice(c.length).match(delimiterRe);
     if (m && m[1].trim()) {
       return { type: "dialogue", character: c, text: m[1].trim() };
     }
