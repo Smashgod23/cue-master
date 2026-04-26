@@ -1053,18 +1053,17 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
 
     def _is_acronym_safe_correction(orig: str, repl: str) -> bool:
         """Whether `repl` is a non-acronym-corrupting fix for an all-caps token.
-        Accepts same-length single-glyph OCR confusions (THC -> THE) and
-        adjacent transpositions (HTE -> THE). Rejects insertions/deletions
-        and unrelated substitutions, so CIA/NASA/LGBT pass through."""
+        Accepts only same-length single-glyph OCR confusions (THC -> THE).
+        Rejects everything else - including transpositions like HTE -> THE,
+        which would also let real acronyms get rewritten (CTA -> CAT,
+        PTA -> PAT). Insertions/deletions are rejected too (CIA, NASA,
+        LGBT, FBI all stay intact)."""
         if len(orig) != len(repl):
             return False
-        diffs = [(i, x, y) for i, (x, y) in enumerate(zip(orig.lower(), repl.lower())) if x != y]
-        if len(diffs) == 1:
-            return frozenset((diffs[0][1], diffs[0][2])) in _ocr_pairs
-        if len(diffs) == 2:
-            (i1, x1, y1), (i2, x2, y2) = diffs
-            return i2 == i1 + 1 and x1 == y2 and x2 == y1
-        return False
+        diffs = [(x, y) for x, y in zip(orig.lower(), repl.lower()) if x != y]
+        if len(diffs) != 1:
+            return False
+        return frozenset(diffs[0]) in _ocr_pairs
 
     def _edit_distance(a: str, b: str) -> int:
         if abs(len(a) - len(b)) > 1:
@@ -1169,10 +1168,10 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
                 continue
 
             # All-caps tokens are usually legitimate acronyms. Only rewrite
-            # them when the change is acronym-safe: an OCR glyph confusion
-            # (THC -> THE) or an adjacent transposition (HTE -> THE). This
-            # blocks CIA -> VIA, NASA -> NASAL, LGBT -> GET while still
-            # repairing all-caps OCR damage.
+            # them on a known OCR glyph confusion (THC -> THE via c/e). This
+            # is deliberately strict: allowing transpositions would let CTA
+            # become CAT and PTA become PAT, and allowing length changes
+            # would let NASA become NASAL.
             if part.isupper() and len(part) > 1 and not _is_acronym_safe_correction(part, candidate):
                 new_parts.append(part)
                 continue
