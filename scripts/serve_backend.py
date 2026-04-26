@@ -1038,8 +1038,15 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
         if a == b:
             return 0
         if len(a) == len(b):
-            diffs = sum(x != y for x, y in zip(a, b))
-            return 1 if diffs == 1 else 2
+            diffs = [(i, x, y) for i, (x, y) in enumerate(zip(a, b)) if x != y]
+            if len(diffs) == 1:
+                return 1
+            # Damerau transposition: two adjacent swapped chars (e.g. teh -> the).
+            if len(diffs) == 2:
+                (i1, x1, y1), (i2, x2, y2) = diffs
+                if i2 == i1 + 1 and x1 == y2 and x2 == y1:
+                    return 1
+            return 2
         longer, shorter = (a, b) if len(a) > len(b) else (b, a)
         for i in range(len(longer)):
             if longer[:i] + longer[i+1:] == shorter:
@@ -1096,8 +1103,12 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
             if not re.fullmatch(r"[a-zA-Z']+", part):
                 new_parts.append(part)
                 continue
-            # Skip all-caps, very short tokens (likely fragments), protected words
-            if part.isupper() or len(part) <= 3 or part.lower() in protected:
+            # Skip very short tokens and protected words. All-caps tokens used
+            # to be skipped wholesale, but that meant common OCR damage like
+            # "THC"->"THE" or "TIIE"->"THE" never got corrected. Real character
+            # names are already in `protected` via the cast scan, so checking
+            # the protected set is the safer gate.
+            if len(part) < 3 or part.lower() in protected:
                 new_parts.append(part)
                 continue
 
@@ -1112,6 +1123,14 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
                 continue
 
             if _edit_distance(part.lower(), candidate) != 1:
+                new_parts.append(part)
+                continue
+
+            # For 3-char words, only accept same-length corrections (substitution
+            # or transposition). Pyspellchecker's deletion/insertion candidates
+            # for 3-letter unknowns are unreliable — "fbi"->"bi", "omg"->"om",
+            # "usa"->"us" all pass edit-distance==1 but are clearly wrong.
+            if len(part) == 3 and len(candidate) != len(part):
                 new_parts.append(part)
                 continue
 
@@ -1155,7 +1174,9 @@ def autocorrect_script(lines: list[dict]) -> list[dict]:
                 new_parts.append(part)
                 continue
 
-            if part[0].isupper():
+            if part.isupper() and len(part) > 1:
+                candidate = candidate.upper()
+            elif part[0].isupper():
                 candidate = candidate[0].upper() + candidate[1:]
 
             corrections.append({"original": part, "corrected": candidate})
