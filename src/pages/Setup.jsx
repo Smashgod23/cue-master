@@ -109,8 +109,8 @@ export default function Setup() {
               Your Director is studying the play...
             </h2>
             <p className="font-body text-sm text-ink-soft mt-3 max-w-md mx-auto">
-              Searching for historical context, character analysis, and performance
-              notes for {characterName} in <em>{playName}</em>. This may take a moment.
+              Pulling character background and performance notes for {characterName}
+              in <em>{playName}</em>. This may take a moment.
             </p>
           </div>
         ) : (
@@ -186,7 +186,7 @@ export default function Setup() {
                   rows={4}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Any context for the director: your interpretation, areas you want feedback on, scenes you're struggling with..."
+                  placeholder="Context for the director: your take on the character, what you want feedback on..."
                   className="w-full px-4 py-3 rounded-xl bg-parchment-warm border border-parchment-deep
                     font-body text-sm text-ink placeholder:text-warmgray-light resize-none
                     focus:outline-none focus:border-gold focus:ring-1 focus:ring-gold/30

@@ -96,7 +96,7 @@ function HiddenScriptView({ status, transcript, userCharName }) {
           </p>
         ) : (
           <p className="font-serif text-3xl md:text-4xl text-warmgray italic leading-snug">
-            Speak your line — the script is hidden so you can rehearse from memory.
+            Speak your line. The script is hidden so you can rehearse from memory.
           </p>
         )}
       </div>
@@ -370,7 +370,7 @@ export default function RehearsalRoom() {
             {ws.transcript?.text
               ? `"${ws.transcript.text}"`
               : ws.status === "listening"
-                ? "Speak your line — I'll show you what I hear."
+                ? "Speak your line. I'll show you what I hear."
                 : ""}
           </span>
           {ws.transcript?.wpm != null && (

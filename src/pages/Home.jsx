@@ -35,9 +35,9 @@ export default function Home() {
             Your personal director,<br />always in the wings.
           </h2>
           <p className="font-body text-lg text-ink-soft mt-6 max-w-lg mx-auto leading-relaxed">
-            Upload a script, pick your role, and rehearse with an AI that listens
-            to your delivery, reads your scene partner's lines, and gives you
-            real-time feedback on pacing, volume, and emotion.
+            Upload a script, pick your role, and rehearse. The AI reads your scene
+            partner's lines aloud and gives you delivery notes on pacing and
+            volume as you go.
           </p>
         </div>
 
@@ -70,9 +70,9 @@ export default function Home() {
               <h3 className="font-serif text-lg font-bold text-ink">Performance Mode</h3>
             </div>
             <p className="font-body text-sm text-ink-soft leading-relaxed">
-              Run your scene like it's opening night. The AI director watches your pacing,
-              volume, and emotional delivery, then interrupts with targeted notes when
-              something needs work. Your script stays hidden so you rely on memory.
+              Run your scene like it's opening night. The AI director watches your pacing
+              and delivery, then breaks in with targeted notes when something needs work.
+              Your script stays hidden so you have to work from memory.
             </p>
           </button>
 
@@ -100,7 +100,7 @@ export default function Home() {
             <p className="font-body text-sm text-ink-soft leading-relaxed">
               Work through your lines with the script visible. The AI fuzzy-matches
               what you say against the expected text. Get it close enough and the scene
-              advances. Miss it and you get a gentle nudge to try again.
+              advances. Miss and you'll be asked to run the line again.
             </p>
           </button>
         </div>
@@ -118,12 +118,11 @@ export default function Home() {
               <h3 className="font-serif text-lg font-bold text-ink">The AI Director</h3>
             </div>
             <p className="font-body text-sm text-ink-soft leading-relaxed">
-              Before your rehearsal starts, the director looks up your play and character
-              online and builds a reference on the role - who they are, what they want, how
-              other actors have played them. During the scene it tracks your pacing (words
-              per minute), volume, and how closely you match the text. That data plus the
-              character research is what shapes the notes, so the feedback is about your
-              scene, not generic acting advice.
+              Before rehearsal, the director looks up your play and character online and
+              builds out the role: who they are, what they want, how other actors have
+              played them. During the scene it tracks your pacing and volume against the
+              text. That data plus the character research shapes the notes, so the feedback
+              is about your scene rather than generic acting advice.
             </p>
           </div>
         </div>
