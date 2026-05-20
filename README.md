@@ -31,7 +31,7 @@ Built in React 19 with Vite 8, Tailwind CSS v4, and React Router v7. Five pages:
 
 - **Home** - mode selection (Learning vs Performance) and onboarding
 - **Upload** - drag-and-drop script upload, posts to `/api/upload`
-- **Script Review** - lets you verify and fix the parsed script before rehearsal: edit any line, reassign it to a different character, split merged lines at the cursor, delete junk, and insert missing lines. Auto-corrected typos are highlighted in gold with a click-to-undo option.
+- **Script Review** - lets you verify and fix the parsed script before rehearsal: edit any line, reassign it to a different character, split merged lines at the cursor, delete junk, and insert missing lines. When you split a line, the after-cursor text is auto-classified as dialogue, a stage direction, or a new character cue so you don't have to fix the type by hand. Auto-corrected typos are highlighted in gold with a click-to-undo option.
 - **Setup** - character setup form, posts to `/api/research` to kick off the RAG pipeline; has a skip path if research fails
 - **Rehearsal Room** - live rehearsal UI with WebSocket connection to the backend; shows a demo scene if no script is loaded
 
