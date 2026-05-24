@@ -19,7 +19,7 @@ Nothing goes to the cloud. Speech recognition, the language model, TTS, and the 
 
 I've done theatrical performance work and found that the hardest part of preparation isn't memorizing lines - it's building the instinct to respond in the moment to another actor. Reading lines off a page alone doesn't build that reflex. I wanted something that would read my scene partner's lines back to me, listen as I said mine, and evaluate whether my delivery matched the character I was trying to play.
 
-Existing tools are either line-memorization apps (they quiz you but don't respond) or cloud-based products that send your audio to a third party. I wanted something that ran fully local so I could use it on an unpublished script without worrying about data.
+Existing tools are either line-memorization apps (they quiz you but don't respond) or cloud-based products that send your audio to a third party. I wanted something that ran fully local so I could use it on an unpublished script without worrying about audio or script text leaving my machine.
 
 ---
 
